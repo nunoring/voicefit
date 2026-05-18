@@ -1,5 +1,16 @@
 // 마크다운 → HTML 변환 공유 유틸 (publish·GET route 양쪽에서 import)
 
+// 쿠팡 파트너스 필수 고지 (전자상거래법 및 표시광고법 준수)
+const LEGAL_DISCLOSURE_HTML =
+  '<p style="margin-top:2em;padding:12px;background:#f8f8f8;border-left:3px solid #ccc;font-size:0.85em;color:#666;">' +
+  '이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.' +
+  '</p>'
+
+/** 생성된 HTML 끝에 법적 고지문을 추가한다. */
+export function appendLegalDisclosure(html: string): string {
+  return html + '\n' + LEGAL_DISCLOSURE_HTML
+}
+
 function applyInline(text: string): string {
   return text
     .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')

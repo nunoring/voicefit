@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { markdownToHtml, buildImageUrlMap } from '@/lib/markdown'
+import { markdownToHtml, buildImageUrlMap, appendLegalDisclosure } from '@/lib/markdown'
 import type { Post, PublishApiResult } from '@/types'
 
 // ── 라우트 핸들러 ─────────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ export async function POST(
       .order('created_at', { ascending: true })
 
     const imageUrls = buildImageUrlMap((imgRows ?? []) as { public_url: string }[])
-    const html  = markdownToHtml(post.body_text, imageUrls)
+    const html  = appendLegalDisclosure(markdownToHtml(post.body_text, imageUrls))
     const title = (post.body_text.split('\n').find((l) => l.trim()) ?? '')
       .replace(/^#+\s*/, '')
       .slice(0, 80)
