@@ -30,8 +30,9 @@ export async function GET(_req: NextRequest, ctx: RouteContext<'/api/posts/[id]'
 
     // 이미지 순번 기반 URL 맵 → body_html 계산 (클라이언트 마크다운 파서 불필요)
     const imageUrls = buildImageUrlMap((imgRows ?? []) as { public_url: string }[])
-    const body_html = post.body_text
-      ? appendLegalDisclosure(markdownToHtml(post.body_text, imageUrls))
+    const rawHtml = post.body_text ? markdownToHtml(post.body_text, imageUrls) : null
+    const body_html = rawHtml
+      ? (post.post_type === 'product' ? appendLegalDisclosure(rawHtml) : rawHtml)
       : null
 
     return NextResponse.json({ ...post, body_html })

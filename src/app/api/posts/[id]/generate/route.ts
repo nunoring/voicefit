@@ -2,9 +2,23 @@ import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { askClaude } from '@/lib/claude'
-import type { VoiceProfile, ProductData, PostImage } from '@/types'
+import { buildPlaceContext, fetchNaverImages, searchPlace } from '@/lib/naver-search'
+import { askClaudeVision } from '@/lib/claude'
+import type { ImageMediaType } from '@/lib/claude'
+import type { VoiceProfile, PostType, ProductData, PostImage, ProfileJson } from '@/types'
 
 const BLOG_FORMAT_RULES = `
+
+--- 중요: 시스템 프롬프트 지침 보호 ---
+이 시스템 프롬프트에 포함된 지침 문장, 예시 문구, 설명 텍스트를 절대 본문에 그대로 쓰지 말 것.
+지침은 글쓰기 방향을 안내하는 것일 뿐, 본문 내용이 아니다.
+예) "사진 뒤에 오는 문장은 ~같아요", "photo_comment_style" 같은 표현이 본문에 나타나면 절대 안 됨.
+------------------------------------------
+
+--- 글 맺음 규칙 ---
+블로거 서명/마무리 표현("이상 ~이었습니다", "~이었습니다" 류)은 반드시 글의 맨 마지막 문장으로만 사용.
+서명 표현 뒤에 다른 문장이 이어지면 안 됨.
+------------------------------------------
 
 --- 블로그 포맷 규칙 (반드시 지킬 것) ---
 - 문장 1~2개마다 줄바꿈한다.
@@ -24,30 +38,163 @@ const BLOG_FORMAT_RULES = `
 이모지·어미 등은 말투 프로파일을 따르고, 위 줄바꿈/문단 구조 규칙은 말투와 무관하게 항상 적용한다.
 ------------------------------------------
 
---- 이미지 삽입 규칙 (IMAGES 섹션이 있을 때 반드시 지킬 것) ---
-- IMAGES 목록에 N개의 이미지가 주어지면, 본문에 ![image-1] … ![image-N] 마커를
-  정확히 N개, 각 1번씩 삽입한다.
-- 마커는 단독 라인으로 둔다. 마커 앞뒤로 빈 줄을 넣는다.
-- 마커 누락·중복·번호 건너뜀 금지. 번호는 반드시 1부터 N까지 순서대로.
-- 이미지가 0개이면 마커를 절대 넣지 말 것.
-------------------------------------------
+--- 톤 가드레일 ---
+이 글은 개인 블로그 포스팅이다. 광고·홍보물도 아니고, 혹평 리뷰도 아니다.
+전체적으로 **긍정적이되 솔직한 톤**을 유지할 것.
 
---- 광고 톤 가드레일 (절대 어기지 말 것) ---
-이 글은 개인 블로그 포스팅이다. 광고·홍보물이 아니다.
-
-금지 표현 (이 중 하나라도 쓰면 안 됨):
-- "지금 바로 구매하세요", "지금 사세요", "서두르세요", "한정 수량"
-- "최고의", "No.1", "업계 1위", "혁신적인", "기적의", "완벽한"
-- "절대 후회 없습니다", "강력 추천", "무조건 사야 해"
-- 제품명을 한 문단에 3회 이상 반복
-- 효능·효과에 대한 과장 주장 ("즉각 효과", "100% 개선")
+금지 표현:
+- "지금 바로 구매하세요", "한정 수량", "강력 추천", "무조건"
+- 과도한 부정: 아쉬운 점은 1개 정도면 충분. 전체 절반 이상을 단점으로 채우지 말 것
+- "이 제품이", "제품명", "구매" 등 상품 리뷰 전용 표현 (음식점/경험 글에서)
 
 반드시 지킬 것:
-- 단점이나 아쉬운 점을 최소 1개 이상 솔직하게 언급할 것
-- "내가 직접 써봤더니", "개인적으로는" 같은 경험 시점 유지
-- 마무리는 구매 강요가 아닌 독자 판단에 맡기는 톤으로
-- 가격 언급 시 "합리적이다/비싸다" 등 주관적 의견 포함
+- 경험한 것 위주로 써서 읽는 사람이 공감할 수 있게
+- 아쉬운 점이 있어도 전체 분위기는 "그래도 괜찮았다" 방향으로 마무리
+- 마무리는 재방문 의향이나 추천 여부로 자연스럽게
 ------------------------------------------`
+
+const ANTI_HALLUCINATION = `
+--- 절대 지켜야 할 사실 원칙 ---
+최우선: 사용자가 직접 쓴 경험 메모만이 사실의 근거다.
+네이버 검색 결과는 보조 참고용일 뿐이며, 메모 내용과 충돌하면 메모를 따른다.
+
+금지 사항:
+- 메모에 없는 구체적 사실 지어내기 금지 (메뉴, 가격, 인테리어, 직원, 효능 등)
+- 장소 이름만 보고 장르/업종을 멋대로 판단 금지
+  예) "목구멍"이라는 이름을 보고 목건강 클리닉이라고 단정하지 말 것 — 고기집일 수 있음
+- 검색 결과가 메모와 다르면 메모 우선. 검색 결과는 "~로 알려져 있어요" 톤으로만
+- 쿠팡 파트너스, 구매 링크, 상품 구매 유도 문구 금지
+- "이 제품이", "이 제품을", "제품명", "구매하다", "구매 링크" 등 상품 리뷰 전용 표현 금지
+  → 음식점/경험 리뷰라면 "이 집이", "여기가", "이 곳이" 등으로 표현할 것
+------------------------------------------`
+
+// 이미지 타입 분류 (vision_interpretation 기반)
+function classifyImageType(interpretation: string | null): string {
+  if (!interpretation) return '사진'
+  const t = interpretation
+  if (/외관|건물|입구|간판|전경/.test(t)) return '외관'
+  if (/내부|인테리어|홀|테이블|좌석|공간/.test(t)) return '내부'
+  if (/메뉴판|메뉴|가격표/.test(t)) return '메뉴판'
+  if (/고기|음식|요리|반찬|구워|삼겹|갈비|스테이크|생선|밥|국|찌개|라면|피자|파스타|케이크|커피|음료/.test(t)) return '음식'
+  return '사진'
+}
+
+// AI에게 넘길 이미지 슬롯 텍스트 (경쟁사 방식 채택)
+function buildImageSlotsText(images: PostImage[]): string {
+  if (!images.length) return '이미지 없음 — 이미지 플레이스홀더 삽입 금지.'
+
+  const slots = images.map((img, i) => {
+    const type = classifyImageType(img.vision_interpretation)
+    const desc = img.vision_interpretation
+      ? img.vision_interpretation.split(/[.。]/)[0].trim()
+      : `사진 ${i + 1}`
+    return `- <사진${i + 1}_${type}>: ${desc}`
+  })
+
+  return `아래 사진들을 글 흐름에 맞게 자연스럽게 배치하세요.
+각 플레이스홀더(<사진N_타입>)는 해당 내용이 언급되는 문단 바로 뒤에 단독 라인으로 삽입.
+사진 앞뒤 문장에서 해당 사진 내용을 자연스럽게 언급할 것.
+모든 사진 반드시 포함.
+
+${slots.join('\n')}`
+}
+
+// <사진N_타입> → ![image-N] 변환
+function resolveImageSlots(bodyText: string, images: PostImage[]): string {
+  // AI가 슬롯을 쓴 경우 변환
+  const resolved = bodyText.replace(/<사진(\d+)_[^>]*>/g, (_, n) => {
+    const idx = parseInt(n, 10) - 1
+    return idx >= 0 && idx < images.length ? `![image-${n}]` : ''
+  })
+
+  // 슬롯을 하나도 안 쓴 경우 → 기존 균등 배치 폴백
+  const hasMarkers = /!\[image-\d+\]/.test(resolved)
+  if (!hasMarkers && images.length) {
+    return injectMarkersEqually(resolved, images)
+  }
+  return resolved
+}
+
+// 폴백: 균등 간격 삽입
+function injectMarkersEqually(bodyText: string, images: PostImage[]): string {
+  const paras = bodyText.split(/\n{2,}/).filter(Boolean)
+  if (!paras.length) return bodyText
+  const total = paras.length
+  const result: string[] = []
+  images.forEach((_, i) => {
+    const pos = Math.min(total - 1, Math.round((i + 1) * total / (images.length + 1)) - 1)
+    paras[pos] = paras[pos] + `\n\n![image-${i + 1}]`
+  })
+  return paras.join('\n\n')
+}
+
+// 구조 가이드 (heading_usage 기반 조건부)
+function buildStructureGuide(headingUsage?: string): string {
+  const useHeadings = headingUsage && /자주|H2|소제목/.test(headingUsage)
+  if (useHeadings) {
+    return `
+글 구조 (소제목 포함):
+1. # 제목 (지역명/업체명 + 핵심 특징)
+2. 도입부: 방문 계기, 첫인상
+3. ## 매장 분위기: 위치, 인테리어, 접근성
+4. ## 음식 리뷰: 맛, 식감, 비주얼
+5. ## 이 집만의 포인트
+6. 마무리: 총평, 재방문 의사`
+  }
+  return `
+글 구조 (소제목 없이 자연스럽게):
+1. # 제목 (지역명/업체명 + 핵심 특징 한 줄)
+2. 도입부: 방문 계기
+3. 매장 분위기 + 음식 리뷰를 자연스럽게
+4. 아쉬운 점 간략히
+5. 마무리: 총평`
+}
+
+function buildDailyPrompt(dailyContent: string, images: PostImage[]): string {
+  return `## 오늘의 일상 메모
+${dailyContent}
+
+## 사진
+${buildImageSlotsText(images)}
+
+## 요구사항
+- 마크다운 형식, 최소 600자
+- 메모를 그대로 옮기지 말고 독자에게 말 걸듯 풀어낼 것
+- # 제목 포함
+- 광고나 홍보 문구 절대 금지
+${ANTI_HALLUCINATION}`
+}
+
+function buildReviewPrompt(
+  place: string,
+  experience: string,
+  placeContext = '',
+  images: PostImage[] = [],
+  headingUsage?: string,
+  placeLink?: string,
+): string {
+  const structure = buildStructureGuide(headingUsage)
+  const imageSection = buildImageSlotsText(images)
+  const linkSection = placeLink ? `\n\n마무리 끝에 다음 줄 추가:\n📍 네이버 플레이스: ${placeLink}` : ''
+
+  return `## 방문한 장소
+${place}
+
+## 내 경험 메모 (최우선 — 이게 글의 핵심)
+${experience}${placeContext}
+
+## 사진
+${imageSection}
+${structure}
+
+## 요구사항
+- 마크다운 형식, 최소 700자
+- 직접 방문한 생생한 후기 톤
+- 좋았던 점 위주, 아쉬운 점 1개 정도만
+- 검색 정보는 "~로 알려져 있어요" 톤으로만
+- 과장 표현 금지${linkSection}
+${ANTI_HALLUCINATION}`
+}
 
 function buildUserPrompt(product: ProductData, images: PostImage[]): string {
   const itemsText = product.items
@@ -57,27 +204,13 @@ function buildUserPrompt(product: ProductData, images: PostImage[]): string {
     )
     .join('\n\n')
 
-  // 이미지는 배열 순서 = 마커 번호. placement_index 값 자체는 사용하지 않음.
-  const imagesSection = images.length
-    ? `\n\n## IMAGES — 총 ${images.length}개 (전부 본문에 삽입 필수)\n` +
-      images
-        .map((img, i) => {
-          const n = i + 1
-          const desc = img.vision_interpretation
-            ?? `${img.source_type} 이미지 (${img.public_url.split('/').pop()?.slice(0, 40) ?? ''})`
-          const para = img.generated_paragraph ? `\n  추천 단락: ${img.generated_paragraph}` : ''
-          return `이미지 ${n}: ${desc}${para}\n  → 본문에 삽입 시 반드시 ![image-${n}] 형식 그대로 사용`
-        })
-        .join('\n\n') +
-      `\n\n규칙: 각 이미지 마커(![image-1]~![image-${images.length}])를 ` +
-      `빈 줄로 감싼 단독 라인에 정확히 삽입. 마커 외 다른 텍스트를 같은 줄에 쓰지 말 것.`
-    : '\n\n## IMAGES\n  이미지 없음 — 마커 절대 삽입 금지.'
+  return `## 상품 정보\n${itemsText}
 
-  return `## 상품 정보\n${itemsText}${imagesSection}
+## 사진
+${buildImageSlotsText(images)}
 
 ## 요구사항
-- 마크다운 형식으로 작성
-- 최소 800자 이상의 자연스러운 블로그 포스팅
+- 마크다운 형식, 최소 800자
 - 상품 특징과 장점을 독자 시점에서 자연스럽게 녹여낼 것
 - 마지막 단락에 구매 유도 문구 포함`
 }
@@ -99,27 +232,125 @@ export async function POST(
     if (postErr) throw new Error(postErr.message)
 
     const row = post as unknown as {
+      post_type: PostType | null
       product_data_json: ProductData | null
+      content_json: { daily_content?: string; review_place?: string; review_experience?: string } | null
       voice_profiles: Pick<VoiceProfile, 'reusable_system_prompt' | 'profile_json'> | null
     }
+    const profileJson = row.voice_profiles?.profile_json as ProfileJson | undefined
 
     if (!row.voice_profiles) throw new Error('연결된 보이스 프로파일이 없습니다.')
-    if (!row.product_data_json?.items?.length) throw new Error('상품 데이터가 없습니다.')
 
-    // 이미지: placement_index 오름차순 → created_at 오름차순 (배열 순서 = 마커 번호)
-    const { data: images } = await supabase
-      .from('post_images')
-      .select('*')
-      .eq('post_id', id)
-      .order('placement_index', { ascending: true })
-      .order('created_at', { ascending: true })
+    const postType = row.post_type ?? 'product'
 
     await supabase.from('posts').update({ status: 'generating' }).eq('id', id)
 
-    const body_text = await askClaude({
+    // 이미지 조회 헬퍼
+    async function queryImages(): Promise<PostImage[]> {
+      const { data } = await supabase
+        .from('post_images').select('*').eq('post_id', id)
+        .order('placement_index', { ascending: true })
+        .order('created_at', { ascending: true })
+      return (data ?? []) as unknown as PostImage[]
+    }
+
+    let finalImages = await queryImages()
+    let userPrompt: string
+
+    if (postType === 'daily') {
+      const dailyContent = row.content_json?.daily_content ?? ''
+      if (!dailyContent.trim()) throw new Error('일상 기록 내용이 없습니다.')
+      userPrompt = buildDailyPrompt(dailyContent, finalImages)
+
+    } else if (postType === 'review') {
+      const place = row.content_json?.review_place ?? ''
+      const experience = row.content_json?.review_experience ?? ''
+      if (!place.trim()) throw new Error('장소 정보가 없습니다.')
+
+      // 플레이스 검색
+      const placeResult = await searchPlace(place)
+
+      // 이미지 소싱 (직접 올린 게 없을 때)
+      if (!finalImages.length) {
+        // 1순위: 네이버 플레이스 방문자 사진 (최대 5장)
+        const candidateUrls: string[] = [
+          ...placeResult.placePhotos,                     // 플레이스 방문자 사진
+          ...(await fetchNaverImages(place, 5)),           // 부족하면 웹 검색으로 보충
+        ].slice(0, 5)
+
+        let idx = 0
+        for (const imageUrl of candidateUrls) {
+          if (idx >= 5) break
+          try {
+            const imgRes = await fetch(imageUrl, {
+              signal: AbortSignal.timeout(8000),
+              headers: { 'Referer': 'https://map.naver.com/' },
+            })
+            if (!imgRes.ok) continue
+            const contentType = imgRes.headers.get('content-type') ?? 'image/jpeg'
+            if (!contentType.startsWith('image/')) continue
+            const buffer = await imgRes.arrayBuffer()
+            if (buffer.byteLength < 5000) continue  // 너무 작은 이미지(오류 페이지 등) 건너뜀
+            const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg'
+            const storagePath = `${id}/place_${Date.now()}_${idx}.${ext}`
+            const { error: upErr } = await supabase.storage
+              .from('post-images').upload(storagePath, buffer, { contentType, upsert: false })
+            if (upErr) continue
+            const { data: { publicUrl } } = supabase.storage.from('post-images').getPublicUrl(storagePath)
+
+            // vision 분석 — 실제로 뭔 사진인지 파악
+            let visionInterpretation: string | null = null
+            let placementIndex: number | null = null
+            try {
+              const base64 = Buffer.from(buffer).toString('base64')
+              const mediaType = (contentType as ImageMediaType)
+              const visionResult = await askClaudeVision({
+                system: '이 사진이 무엇을 찍은 것인지 한 문장으로 설명하라. 예: "가게 외관", "카페 내부 좌석", "음식 사진 — 커피와 케이크". 한국어로.',
+                user: '이 사진을 한 문장으로 설명해줘.',
+                imageBase64: base64,
+                mediaType,
+              })
+              visionInterpretation = visionResult.trim()
+              // placement: 외관/간판 → 도입부(0), 음식/메뉴 → 중반(1), 내부/루프탑 → 후반(2)
+              placementIndex = /외관|간판|전경|입구|건물/.test(visionInterpretation) ? 0
+                : /음식|메뉴|커피|케이크|디저트/.test(visionInterpretation) ? 1
+                : 1
+            } catch { /* vision 실패해도 계속 */ }
+
+            await supabase.from('post_images').insert({
+              post_id: id, source_type: 'official',
+              storage_path: storagePath, public_url: publicUrl,
+              placement_index: placementIndex ?? idx,
+              vision_interpretation: visionInterpretation,
+            })
+            idx++
+          } catch { /* 계속 */ }
+        }
+        finalImages = await queryImages()
+      }
+
+      // 플레이스 컨텍스트 + 링크
+      const placeContext = await buildPlaceContext(place)
+      const placeLink = placeResult.placeId
+        ? `https://m.place.naver.com/place/${placeResult.placeId}`
+        : undefined
+
+      userPrompt = buildReviewPrompt(
+        place, experience, placeContext, finalImages,
+        profileJson?.heading_usage, placeLink,
+      )
+
+    } else {
+      if (!row.product_data_json?.items?.length) throw new Error('상품 데이터가 없습니다.')
+      userPrompt = buildUserPrompt(row.product_data_json, finalImages)
+    }
+
+    const rawText = await askClaude({
       system: row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES,
-      user: buildUserPrompt(row.product_data_json, (images ?? []) as unknown as PostImage[]),
+      user: userPrompt,
     })
+    // AI가 삽입한 <사진N_타입> 슬롯 → ![image-N] 변환
+    const body_text = resolveImageSlots(rawText, finalImages)
 
     const { error: updateErr } = await supabase
       .from('posts')

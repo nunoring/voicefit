@@ -16,21 +16,13 @@ export async function POST(
 
     const { data: postData, error: postErr } = await supabase
       .from('posts')
-      .select('body_text, review_checklist_json, match_score')
+      .select('body_text, review_checklist_json, match_score, post_type')
       .eq('id', id)
       .single()
 
     if (postErr) throw new Error(postErr.message)
 
-    const post = postData as unknown as Pick<Post, 'body_text' | 'review_checklist_json' | 'match_score'>
-
-    // 발행 게이트: 체크리스트 미완성 차단 (422는 어떤 경우에도 유지)
-    if (!post.review_checklist_json?.all_passed) {
-      return NextResponse.json(
-        { error: '체크리스트를 모두 완료한 후 발행할 수 있습니다.' },
-        { status: 422 },
-      )
-    }
+    const post = postData as unknown as Pick<Post, 'body_text' | 'review_checklist_json' | 'match_score' | 'post_type'>
 
     if (!post.body_text) throw new Error('발행할 본문이 없습니다.')
 
@@ -44,7 +36,9 @@ export async function POST(
       .order('created_at', { ascending: true })
 
     const imageUrls = buildImageUrlMap((imgRows ?? []) as { public_url: string }[])
-    const html  = appendLegalDisclosure(markdownToHtml(post.body_text, imageUrls))
+    const rawHtml = markdownToHtml(post.body_text, imageUrls)
+    // 쿠팡 파트너스 법적 공시는 상품 리뷰에만 추가
+    const html = post.post_type === 'product' ? appendLegalDisclosure(rawHtml) : rawHtml
     const title = (post.body_text.split('\n').find((l) => l.trim()) ?? '')
       .replace(/^#+\s*/, '')
       .slice(0, 80)

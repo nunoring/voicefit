@@ -9,11 +9,18 @@ interface InterpretResult {
   generated_paragraph: string
 }
 
-const VISION_SYSTEM = `블로그 포스팅용 이미지를 분석하라.
+const VISION_SYSTEM_BASE = `블로그 포스팅용 이미지를 분석하라.
+
+아래 말투 가이드에 맞춰 블로거 본인이 직접 쓴 것 같은 생생한 표현으로 작성할 것.
+"이 이미지는..." 같은 AI 설명체 절대 금지. 블로거가 사진 보며 직접 말하는 톤으로.
+
+예시 (좋음): "고기 때깔 봐요 진짜 🔥 이거 보고 안 시킬 수가 없잖아요"
+예시 (나쁨): "이 이미지는 철판 위에서 구워지는 삼겹살의 모습입니다"
+
 JSON 필드:
-- vision_interpretation: 이미지 내용 설명 (2~3문장)
-- placement_index: 0=도입부, 1=중반, 2=후반 — 블로그 본문 어느 위치에 어울리는지
-- generated_paragraph: 이 이미지를 소개하는 한국어 단락 (3~5문장)`
+- vision_interpretation: 이 사진을 보며 블로거가 즉흥적으로 한 마디 한다면? (1~2문장, 블로거 말투로)
+- placement_index: 0=도입부, 1=중반, 2=후반 — 블로그 흐름상 어느 위치에 어울리는지
+- generated_paragraph: 이 사진을 블로그 본문에서 소개하는 단락 (2~3문장, 블로거 말투로)`
 
 function mediaTypeFromPath(path: string): ImageMediaType {
   const ext = path.split('.').pop()?.toLowerCase()
@@ -39,16 +46,17 @@ export async function POST(
 
     const supabase = createServerClient()
 
-    const { data: img, error: imgErr } = await supabase
-      .from('post_images')
-      .select('storage_path, public_url')
-      .eq('id', image_id)
-      .eq('post_id', id)
-      .single()
+    // 이미지 + 말투 프로파일 병렬 조회
+    const [{ data: img, error: imgErr }, { data: postData }] = await Promise.all([
+      supabase.from('post_images').select('storage_path, public_url').eq('id', image_id).eq('post_id', id).single(),
+      supabase.from('posts').select('voice_profiles(reusable_system_prompt)').eq('id', id).single(),
+    ])
 
     if (imgErr) throw new Error(imgErr.message)
 
     const row = img as unknown as { storage_path: string; public_url: string }
+    const voicePrompt = (postData as unknown as { voice_profiles?: { reusable_system_prompt?: string } | null })
+      ?.voice_profiles?.reusable_system_prompt ?? ''
 
     // Supabase Storage에서 이미지 다운로드 → base64 변환
     const { data: blob, error: dlErr } = await supabase.storage
@@ -61,8 +69,15 @@ export async function POST(
     const imageBase64 = Buffer.from(buffer).toString('base64')
     const mediaType = mediaTypeFromPath(row.storage_path)
 
+    // 말투 프로파일을 시스템 프롬프트에 주입
+    const system = [
+      voicePrompt ? `[블로거 말투 가이드]\n${voicePrompt}\n\n` : '',
+      VISION_SYSTEM_BASE,
+      '\n\n반드시 유효한 JSON만 출력. 마크다운 코드펜스·설명 금지.',
+    ].join('')
+
     const result = await askClaudeVision({
-      system: VISION_SYSTEM + '\n\n반드시 유효한 JSON만 출력. 마크다운 코드펜스·설명 금지.',
+      system,
       user: '이 이미지를 분석해 JSON으로 반환하라.',
       imageBase64,
       mediaType,

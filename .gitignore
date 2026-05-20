@@ -30,8 +30,11 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files
+.env
+.env.local
+.env.*.local
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +42,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 네이버 Playwright 세션 — 로그인 상태 포함, 절대 커밋 금지
+.naver-session.json
+
+# Playwright 스크린샷
+onboarding-screenshot.png
+
+.vercel

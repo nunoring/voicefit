@@ -65,6 +65,19 @@ function ProfileResult({ profile, reusablePrompt, onConfirm }: {
         {toDisplay(profile.emoji_usage) && <Badge color="blue">이모지: {toDisplay(profile.emoji_usage)}</Badge>}
         {toDisplay(profile.avg_sentence_length) && <Badge color="gray">평균 문장 길이 {toDisplay(profile.avg_sentence_length)}어절</Badge>}
       </div>
+      {(profile.emoji_position || profile.photo_timing || profile.paragraph_length || profile.spacing_style || profile.heading_usage) && (
+        <div>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">글쓰기 스타일 패턴</p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {profile.emoji_position  && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">이모지 위치 </span>{profile.emoji_position}</div>}
+            {profile.photo_timing    && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">사진 타이밍 </span>{profile.photo_timing}</div>}
+            {profile.paragraph_length && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">문단 길이 </span>{profile.paragraph_length}</div>}
+            {profile.spacing_style   && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">띄어쓰기 </span>{profile.spacing_style}</div>}
+            {profile.heading_usage   && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">소제목 </span>{profile.heading_usage}</div>}
+            {profile.photo_comment_style && <div className="col-span-2 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">사진 코멘트 스타일 </span>{profile.photo_comment_style}</div>}
+          </div>
+        </div>
+      )}
       {toDisplay(profile.vocabulary_notes) && (
         <div>
           <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">어휘 특징</p>
@@ -114,6 +127,10 @@ interface SavedProfile {
 function SavedProfiles({ onSelect }: { onSelect: (id: string) => void }) {
   const [profiles, setProfiles] = useState<SavedProfile[]>([])
   const [loading, setLoading] = useState(true)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [renamingId, setRenamingId] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/voice-profiles')
@@ -121,6 +138,34 @@ function SavedProfiles({ onSelect }: { onSelect: (id: string) => void }) {
       .then((data) => { setProfiles(Array.isArray(data) ? data : []); setLoading(false) })
       .catch(() => setLoading(false))
   }, [])
+
+  async function handleDelete(id: string) {
+    if (!confirm('이 말투를 삭제할까요?')) return
+    setDeletingId(id)
+    await fetch(`/api/voice-profiles/${id}`, { method: 'DELETE' })
+    setProfiles((prev) => prev.filter((p) => p.id !== id))
+    setDeletingId(null)
+  }
+
+  function startEdit(p: SavedProfile) {
+    setEditingId(p.id)
+    setEditName(p.name)
+  }
+
+  async function handleRename(id: string) {
+    if (!editName.trim()) return
+    setRenamingId(id)
+    const res = await fetch(`/api/voice-profiles/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editName }),
+    })
+    if (res.ok) {
+      setProfiles((prev) => prev.map((p) => p.id === id ? { ...p, name: editName.trim() } : p))
+    }
+    setEditingId(null)
+    setRenamingId(null)
+  }
 
   if (loading) return null
   if (!profiles.length) return null
@@ -130,21 +175,68 @@ function SavedProfiles({ onSelect }: { onSelect: (id: string) => void }) {
       <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">저장된 말투</p>
       <div className="space-y-2">
         {profiles.map((p) => (
-          <div key={p.id} className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2.5">
-            <div>
-              <p className="text-sm font-medium text-gray-800">{p.name}</p>
-              <p className="text-xs text-gray-400">
-                {toDisplay(p.profile_json?.tone)} · {toDisplay(p.profile_json?.formality)} ·{' '}
-                {new Date(p.created_at).toLocaleDateString('ko-KR')}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onSelect(p.id)}
-              className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
-            >
-              이 말투 사용
-            </button>
+          <div key={p.id} className="rounded-lg border border-gray-200 bg-white px-3 py-2.5">
+            {editingId === p.id ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleRename(p.id); if (e.key === 'Escape') setEditingId(null) }}
+                  autoFocus
+                  className="min-w-0 flex-1 rounded border border-blue-400 px-2 py-1 text-sm text-gray-900 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleRename(p.id)}
+                  disabled={renamingId === p.id}
+                  className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
+                >
+                  저장
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingId(null)}
+                  className="shrink-0 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-500 hover:bg-gray-50"
+                >
+                  취소
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-gray-800">{p.name}</p>
+                  <p className="text-xs text-gray-400">
+                    {toDisplay(p.profile_json?.tone)} · {toDisplay(p.profile_json?.formality)} ·{' '}
+                    {new Date(p.created_at).toLocaleDateString('ko-KR')}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onSelect(p.id)}
+                    className="w-20 rounded-lg bg-blue-600 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+                  >
+                    이 말투 사용
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => startEdit(p)}
+                    className="w-16 rounded-lg border border-gray-200 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                  >
+                    이름 변경
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(p.id)}
+                    disabled={deletingId === p.id}
+                    className="w-12 rounded-lg border border-red-200 py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50 disabled:opacity-40"
+                  >
+                    {deletingId === p.id ? '…' : '삭제'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -170,6 +262,7 @@ export default function OnboardingPage() {
   const [crawlStatus, setCrawlStatus] = useState<CrawlStatus>('idle')
   const [loadedUrls, setLoadedUrls] = useState<string[]>([])
   const [totalImages, setTotalImages] = useState(0)
+  const MAX_URLS = 5
 
   const isAnalyzing = status === 'loading'
 
@@ -177,9 +270,15 @@ export default function OnboardingPage() {
     router.push(`/generate?voice_profile_id=${id}`)
   }
 
+  function handleRemoveUrl(idx: number) {
+    setLoadedUrls((prev) => prev.filter((_, i) => i !== idx))
+    // sourceText에서 해당 구간 제거는 복잡하므로 전체 초기화 후 재수집 대신
+    // 단순히 URL 목록에서만 제거 (텍스트는 유지 — 분석 품질 위해)
+  }
+
   async function handleCrawl() {
     const trimmedUrl = crawlUrl.trim()
-    if (!trimmedUrl) return
+    if (!trimmedUrl || loadedUrls.length >= MAX_URLS) return
     setCrawlStatus('loading')
 
     try {
@@ -248,7 +347,7 @@ export default function OnboardingPage() {
     router.push(`/generate?voice_profile_id=${result.id}`)
   }
 
-  const canSubmit = sourceText.trim().length >= 50
+  const canSubmit = sourceText.trim().length >= 50 || loadedUrls.length > 0
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-10">
@@ -259,30 +358,46 @@ export default function OnboardingPage() {
         {/* 저장된 말투 */}
         <SavedProfiles onSelect={handleSelectSaved} />
 
+        {/* 신규 등록 구분선 */}
+        <div className="flex items-center gap-3">
+          <div className="h-px flex-1 bg-gray-200" />
+          <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">새 말투 등록</span>
+          <div className="h-px flex-1 bg-gray-200" />
+        </div>
+
         {/* URL 크롤링 */}
         <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
-            블로그 URL로 가져오기 <span className="font-normal normal-case text-gray-400">(여러 글 순서대로 추가 가능)</span>
-          </p>
-          <div className="flex gap-2">
-            <input
-              type="url"
-              value={crawlUrl}
-              onChange={(e) => { setCrawlUrl(e.target.value); setCrawlStatus('idle') }}
-              onKeyDown={(e) => e.key === 'Enter' && handleCrawl()}
-              disabled={crawlStatus === 'loading' || isAnalyzing}
-              placeholder="https://blog.naver.com/... 또는 tistory, blogger URL"
-              className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400"
-            />
-            <button
-              type="button"
-              onClick={handleCrawl}
-              disabled={!crawlUrl.trim() || crawlStatus === 'loading' || isAnalyzing}
-              className="rounded-lg bg-gray-700 px-4 py-2 text-sm font-medium text-white hover:bg-gray-600 disabled:bg-gray-200 disabled:text-gray-500"
-            >
-              {crawlStatus === 'loading' ? '가져오는 중…' : '추가'}
-            </button>
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+              블로그 글 URL 추가
+            </p>
+            <span className={`text-xs font-semibold ${loadedUrls.length >= MAX_URLS ? 'text-blue-600' : 'text-gray-400'}`}>
+              {loadedUrls.length}/{MAX_URLS}
+            </span>
           </div>
+
+          {/* URL 입력 */}
+          {loadedUrls.length < MAX_URLS && (
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={crawlUrl}
+                onChange={(e) => { setCrawlUrl(e.target.value); setCrawlStatus('idle') }}
+                onKeyDown={(e) => e.key === 'Enter' && handleCrawl()}
+                disabled={crawlStatus === 'loading' || isAnalyzing}
+                placeholder="https://blog.naver.com/..."
+                className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400"
+              />
+              <button
+                type="button"
+                onClick={handleCrawl}
+                disabled={!crawlUrl.trim() || crawlStatus === 'loading' || isAnalyzing}
+                className="rounded-lg bg-gray-700 px-4 py-2 text-sm font-medium text-white hover:bg-gray-600 disabled:bg-gray-200 disabled:text-gray-500"
+              >
+                {crawlStatus === 'loading' ? '가져오는 중…' : '추가'}
+              </button>
+            </div>
+          )}
 
           {crawlStatus === 'loading' && (
             <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
@@ -290,26 +405,41 @@ export default function OnboardingPage() {
             </div>
           )}
 
-          {/* 로드된 URL 칩 */}
+          {/* 추가된 URL 목록 */}
           {loadedUrls.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5">
+            <div className="mt-3 space-y-2">
               {loadedUrls.map((u, i) => (
-                <span key={i} className="flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-0.5 text-xs text-green-800">
-                  <span>✓</span>
-                  <span className="max-w-[180px] truncate">{new URL(u).hostname}</span>
-                  <span className="text-green-600">#{i + 1}</span>
-                </span>
+                <div key={i} className="flex items-center justify-between rounded-lg border border-green-200 bg-white px-3 py-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="shrink-0 text-xs font-bold text-green-600">#{i + 1}</span>
+                    <span className="truncate text-xs text-gray-700">{u}</span>
+                  </div>
+                  {!isAnalyzing && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveUrl(i)}
+                      className="ml-2 shrink-0 text-xs text-gray-400 hover:text-red-500"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               ))}
-              {totalImages > 0 && (
-                <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600">
-                  이미지 {totalImages}개 감지
-                </span>
-              )}
             </div>
           )}
 
+          {loadedUrls.length === 0 && (
+            <p className="mt-2 text-[11px] text-gray-400">
+              내 블로그 글 URL을 추가하세요. 많을수록 말투 분석이 정확해요.
+            </p>
+          )}
+
           {crawlStatus === 'fallback' && (
-            <p className="mt-2 text-xs text-yellow-700">! 자동 가져오기에 실패했어요. 아래에 직접 붙여넣어 주세요.</p>
+            <p className="mt-2 text-xs text-yellow-700">! 가져오기 실패. 아래에 직접 붙여넣어 주세요.</p>
+          )}
+
+          {loadedUrls.length >= MAX_URLS && (
+            <p className="mt-2 text-xs text-blue-600 font-medium">최대 {MAX_URLS}개 도달 — 아래에서 분석하세요.</p>
           )}
         </div>
 

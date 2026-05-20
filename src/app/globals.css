@@ -1,6 +1,14 @@
 @import "tailwindcss";
 
+@keyframes indeterminate {
+  0%   { transform: translateX(-100%) scaleX(0.4); }
+  50%  { transform: translateX(50%)   scaleX(0.6); }
+  100% { transform: translateX(200%)  scaleX(0.4); }
+}
+
+/* 라이트 테마 단일 고정. 다크 모드 완전 비활성. */
 :root {
+  color-scheme: light;          /* 브라우저 네이티브 UI(입력창·스크롤바)도 라이트로 고정 */
   --background: #ffffff;
   --foreground: #171717;
 }
@@ -12,15 +20,13 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  background-color: #ffffff;
+  color: #171717;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background-color: #ffffff;
+  color: #171717;
   font-family: Arial, Helvetica, sans-serif;
 }
