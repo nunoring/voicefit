@@ -219,6 +219,37 @@ ${buildImageSlotsText(images)}
 - 마지막 단락에 구매 유도 문구 포함`
 }
 
+// 쿠팡 상품평(체험단) — 블로그 아님. 평문·길게·사진 전부 활용·링크 없음.
+function buildCoupangPrompt(product: string, experience: string, images: PostImage[]): string {
+  const imageSection = images.length
+    ? `## 함께 올릴 사진 (${images.length}장 — 쿠팡 앱에 따로 업로드함)
+다음 사진들의 내용(색감·마감·크기·구성 등)을 글에서 자연스럽게 녹여 후기를 풍부하게 만든다.
+단 이미지 placeholder나 <사진N> 같은 표시는 절대 넣지 말 것 — 사진은 쿠팡에 별도 업로드하고 본문엔 글만 들어간다.
+${images
+  .map((img, i) => {
+    const d = img.vision_interpretation ? img.vision_interpretation.split(/[.。]/)[0].trim() : `사진 ${i + 1}`
+    return `- ${d}`
+  })
+  .join('\n')}`
+    : '## 사진\n없음.'
+
+  return `## 상품
+${product}
+
+## 내 사용 경험 메모 (글의 핵심 — 여기 적힌 것만 사실)
+${experience}
+
+${imageSection}
+
+## 요구사항
+- 쿠팡 상품페이지에 올리는 '상품평'이다. 블로그 글이 아니다.
+- 제목·소제목(#) 없이 평문으로. 블로거 서명("이상 ~이었습니다" 류) 금지.
+- 길고 구체적으로 (1000자 이상 목표). 단 메모에 없는 사실을 지어내거나 같은 말을 반복해 늘리지 말 것 — 사진별 관찰과 메모 디테일로 분량을 채운다.
+- 실제 사용 느낌·장점·아쉬운 점·추천 대상을 구체적으로. '도움되는' 후기가 쿠팡 베스트순에 유리하다.
+- 외부 링크·구매 유도 문구 금지 (쿠팡 안에서 쓰는 글이라 링크 불필요).
+${ANTI_HALLUCINATION}`
+}
+
 // 가게리뷰 본문 맨 위 정보 헤더 — 주소·전화·지도 같은 '사실'은 코드가 직접 조립한다.
 // LLM에 맡기면 전화번호·주소를 지어낼 수 있어(할루시네이션) 금지. (✅-15/❌-17 원칙)
 function buildPlaceInfoHeader(place: PlaceSearchResult, placeLink?: string): string {
@@ -280,7 +311,7 @@ export async function POST(
     const row = post as unknown as {
       post_type: PostType | null
       product_data_json: ProductData | null
-      content_json: { daily_content?: string; review_place?: string; review_experience?: string } | null
+      content_json: { daily_content?: string; review_place?: string; review_experience?: string; coupang_product?: string; coupang_experience?: string } | null
       voice_profiles: Pick<VoiceProfile, 'reusable_system_prompt' | 'profile_json'> | null
     }
     const profileJson = row.voice_profiles?.profile_json as ProfileJson | undefined
@@ -335,20 +366,29 @@ export async function POST(
         profileJson?.heading_usage, placeLink,
       )
 
+    } else if (postType === 'coupang') {
+      const product = row.content_json?.coupang_product ?? ''
+      const experience = row.content_json?.coupang_experience ?? ''
+      if (!product.trim()) throw new Error('상품명이 없습니다.')
+      userPrompt = buildCoupangPrompt(product, experience, finalImages)
+
     } else {
       if (!row.product_data_json?.items?.length) throw new Error('상품 데이터가 없습니다.')
       userPrompt = buildUserPrompt(row.product_data_json, finalImages)
     }
 
-    // 큐레이션(상품) 글에만 강한 카피 규칙 추가 — 방문기/일상엔 미적용(말투 차별점 유지)
-    const systemPrompt = row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES + HOOK_RULES + ANTI_AI_TONE
-      + (postType === 'product' ? CURATION_COPY : '')
+    // 쿠팡 상품평은 블로그 서식·제목 룰 제외(평문·제목없음). 그 외엔 블로그 규칙 + 상품글엔 큐레이션 카피.
+    const systemPrompt = postType === 'coupang'
+      ? row.voice_profiles.reusable_system_prompt + ANTI_AI_TONE
+      : row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES + HOOK_RULES + ANTI_AI_TONE
+        + (postType === 'product' ? CURATION_COPY : '')
     const rawText = await askClaude({
       system: systemPrompt,
       user: userPrompt,
     })
     // AI가 삽입한 <사진N_타입> 슬롯 → ![image-N] 변환
-    let body_text = resolveImageSlots(rawText, finalImages)
+    // 쿠팡 상품평은 이미지 placeholder를 안 씀(사진은 쿠팡 앱에 따로 업로드) → 슬롯 변환 건너뜀
+    let body_text = postType === 'coupang' ? rawText : resolveImageSlots(rawText, finalImages)
     // 가게리뷰: 네이버 플레이스 정보(주소·전화·지도) + 대문사진을 맨 위에 코드로 조립
     if (placeInfoHeader) {
       body_text = prependPlaceInfo(placeInfoHeader, body_text, finalImages.length > 0)

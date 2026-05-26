@@ -87,8 +87,10 @@ export async function POST(
     await supabase.from('posts').update({ status: 'generating' }).eq('id', id)
 
     const body_text = await askClaude({
-      system: row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES + HOOK_RULES + ANTI_AI_TONE
-        + (row.post_type === 'product' ? CURATION_COPY : ''),
+      system: row.post_type === 'coupang'
+        ? row.voice_profiles.reusable_system_prompt + ANTI_AI_TONE
+        : row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES + HOOK_RULES + ANTI_AI_TONE
+          + (row.post_type === 'product' ? CURATION_COPY : ''),
       user: buildRegeneratePrompt(row.body_text, scoreDetail, feedback ?? ''),
     })
 

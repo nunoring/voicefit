@@ -34,6 +34,7 @@ const POST_TYPES: { type: PostType; icon: string; label: string; desc: string }[
   { type: 'product', icon: '🛍️', label: '상품 리뷰', desc: '쿠팡, 오늘의집, 올리브영 등' },
   { type: 'daily',   icon: '☀️', label: '일상 기록', desc: '오늘 있었던 일, 생각' },
   { type: 'review',  icon: '⭐', label: '경험 리뷰', desc: '카페, 맛집, 장소 후기' },
+  { type: 'coupang', icon: '📦', label: '쿠팡 상품평', desc: '체험단·구매평 (앱에 붙여넣기)' },
 ]
 
 function emptyItem(): ManualItem {
@@ -194,6 +195,7 @@ function LeftPanel({
     if (postType === 'product') return manualItems.some((it) => it.name.trim())
     if (postType === 'daily') return dailyContent.trim().length >= 10
     if (postType === 'review') return reviewContent.place.trim().length >= 2
+    if (postType === 'coupang') return reviewContent.place.trim().length >= 2
     return false
   })()
 
@@ -309,27 +311,31 @@ function LeftPanel({
         </div>
       )}
 
-      {postType === 'review' && (
+      {(postType === 'review' || postType === 'coupang') && (
         <div className="space-y-3">
           <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-500">장소 / 서비스 이름</label>
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-500">
+              {postType === 'coupang' ? '상품명' : '장소 / 서비스 이름'}
+            </label>
             <input
               type="text"
               value={reviewContent.place}
               onChange={(e) => setReviewContent({ ...reviewContent, place: e.target.value })}
               disabled={isLoading}
-              placeholder="예: 성수동 카페 어니언, 강남 스시 오마카세"
+              placeholder={postType === 'coupang' ? '예: 무선 이어폰 ○○, 스탠드 조명 △△' : '예: 성수동 카페 어니언, 강남 스시 오마카세'}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm placeholder:text-gray-400 focus:border-blue-500 focus:outline-none disabled:bg-gray-50"
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-500">경험 메모</label>
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-500">
+              {postType === 'coupang' ? '사용 경험 메모' : '경험 메모'}
+            </label>
             <textarea
               value={reviewContent.experience}
               onChange={(e) => setReviewContent({ ...reviewContent, experience: e.target.value })}
               disabled={isLoading}
               rows={5}
-              placeholder="느낀 점, 특이한 점, 추천 메뉴 등 자유롭게"
+              placeholder={postType === 'coupang' ? '써보니 어땠는지 자유롭게. 체험단이면 "쿠팡 체험단으로 제공받음"도 적어주세요.' : '느낀 점, 특이한 점, 추천 메뉴 등 자유롭게'}
               className="w-full rounded-lg border border-gray-300 p-3 text-sm placeholder:text-gray-400 focus:border-blue-500 focus:outline-none disabled:bg-gray-50"
             />
           </div>
@@ -341,7 +347,9 @@ function LeftPanel({
         <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">이미지 첨부</p>
         <p className="mb-2 text-[11px] text-gray-400">
           {postType === 'product'
-            ? '첨부하지 않으면 스톡 이미지를 자동 소싱합니다.'
+            ? '첨부하지 않으면 쿠팡 공식 이미지를 사용합니다.'
+            : postType === 'coupang'
+            ? '사진 최대 10장 — 많을수록 쿠팡 상품평 점수에 유리해요.'
             : '직접 찍은 사진을 첨부하세요. 없으면 텍스트만 생성됩니다.'}
         </p>
         {imageSourcingStatus === 'fail' && (
@@ -510,6 +518,7 @@ function GeneratePageInner() {
     }
     if (postType === 'daily') return { daily_content: dailyContent }
     if (postType === 'review') return { review_place: reviewContent.place, review_experience: reviewContent.experience }
+    if (postType === 'coupang') return { coupang_product: reviewContent.place, coupang_experience: reviewContent.experience }
     return {}
   }, [postType, manualItems, dailyContent, reviewContent])
 

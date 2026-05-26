@@ -28,9 +28,11 @@ export async function POST(req: NextRequest) {
       daily_content?: string
       review_place?: string
       review_experience?: string
+      coupang_product?: string
+      coupang_experience?: string
     }
 
-    const { voice_profile_id, post_type, product_data, daily_content, review_place, review_experience } = body
+    const { voice_profile_id, post_type, product_data, daily_content, review_place, review_experience, coupang_product, coupang_experience } = body
 
     if (!voice_profile_id) {
       return NextResponse.json({ error: 'voice_profile_id는 필수입니다.' }, { status: 400 })
@@ -40,6 +42,7 @@ export async function POST(req: NextRequest) {
     const content_json =
       post_type === 'daily' ? { daily_content } :
       post_type === 'review' ? { review_place, review_experience } :
+      post_type === 'coupang' ? { coupang_product, coupang_experience } :
       null
 
     const supabase = createServerClient()

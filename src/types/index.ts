@@ -4,7 +4,7 @@ export type Screen = 'onboarding' | 'generate' | 'review'
 
 // ── 글 유형 ───────────────────────────────────────────────────────────────────
 
-export type PostType = 'product' | 'daily' | 'review'
+export type PostType = 'product' | 'daily' | 'review' | 'coupang'
 
 // ── 발행 플랫폼 ───────────────────────────────────────────────────────────────
 
