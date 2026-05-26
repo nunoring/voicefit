@@ -1,23 +1,33 @@
-import OpenAI from 'openai'
+import Anthropic from '@anthropic-ai/sdk'
 
 // server: NEXT_PUBLIC_ 접두어 미사용으로 클라이언트 번들에 포함되지 않음.
 // API Route / Server Component에서만 import할 것.
-const MODEL = 'gpt-4.1-nano'
+// 말투 자연스러움이 핵심 차별점이라 생성 품질 우선 → Sonnet 4.6 (1인 personal 볼륨, 건당 ~₩40)
+const MODEL = 'claude-sonnet-4-6'
 const MAX_TOKENS = 4096
 
-function getClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY
+function getClient(): Anthropic {
+  const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
     throw new Error(
-      'OPENAI_API_KEY 환경변수가 설정되지 않았습니다. .env.local을 확인하세요.',
+      'ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다. .env.local을 확인하세요.',
     )
   }
-  return new OpenAI({ apiKey })
+  return new Anthropic({ apiKey })
 }
 
-function extractText(response: OpenAI.Chat.ChatCompletion): string {
-  const text = response.choices[0]?.message?.content
-  if (!text) throw new Error('OpenAI가 텍스트 응답을 반환하지 않았습니다.')
+// system 프롬프트는 대체로 길고 반복 사용되므로(말투 프로파일 등) prompt caching 적용.
+// 4096 토큰 미만이면 캐싱이 조용히 비활성화될 뿐 오류는 없음.
+function buildSystem(
+  system: string,
+): Anthropic.TextBlockParam[] | undefined {
+  if (!system) return undefined
+  return [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+}
+
+function extractText(response: Anthropic.Message): string {
+  const text = response.content.find((b) => b.type === 'text')?.text
+  if (!text) throw new Error('Claude가 텍스트 응답을 반환하지 않았습니다.')
   return text
 }
 
@@ -31,13 +41,11 @@ export async function askClaude({
   user: string
 }): Promise<string> {
   try {
-    const response = await getClient().chat.completions.create({
+    const response = await getClient().messages.create({
       model: MODEL,
       max_tokens: MAX_TOKENS,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
+      system: buildSystem(system),
+      messages: [{ role: 'user', content: user }],
     })
     return extractText(response)
   } catch (err) {
@@ -68,15 +76,11 @@ export async function askClaudeJSON<T>({
   const forcedSystem = system + JSON_ENFORCEMENT
 
   async function attempt(): Promise<string> {
-    const response = await getClient().chat.completions.create({
+    const response = await getClient().messages.create({
       model: MODEL,
       max_tokens: MAX_TOKENS,
-      // json_object 모드: 모델이 유효한 JSON만 출력하도록 강제
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: forcedSystem },
-        { role: 'user', content: user },
-      ],
+      system: buildSystem(forcedSystem),
+      messages: [{ role: 'user', content: user }],
     })
     return extractText(response)
   }
@@ -111,17 +115,21 @@ export async function askClaudeVision({
   mediaType: ImageMediaType
 }): Promise<string> {
   try {
-    const response = await getClient().chat.completions.create({
+    const response = await getClient().messages.create({
       model: MODEL,
       max_tokens: MAX_TOKENS,
+      system: buildSystem(system),
       messages: [
-        { role: 'system', content: system },
         {
           role: 'user',
           content: [
             {
-              type: 'image_url',
-              image_url: { url: `data:${mediaType};base64,${imageBase64}` },
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: mediaType,
+                data: imageBase64,
+              },
             },
             { type: 'text', text: user },
           ],

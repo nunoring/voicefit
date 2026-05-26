@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, Suspense } from 'react'
+import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { PostType, ProductItem, ScoreApiResult, Highlight } from '@/types'
 
@@ -164,6 +164,31 @@ function LeftPanel({
     setImageFiles([...imageFiles, ...Array.from(files)])
     setImageSourcingStatus('idle')
   }
+
+  // 클립보드 붙여넣기(Ctrl+V)로 이미지 첨부 — 다운로드 없이 바로.
+  // 클립보드에 이미지가 있을 때만 동작하므로 텍스트 붙여넣기엔 영향 없음.
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const items = e.clipboardData?.items
+      if (!items) return
+      const pasted: File[] = []
+      for (const item of Array.from(items)) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const blob = item.getAsFile()
+          if (blob) {
+            const ext = (item.type.split('/')[1] || 'png').replace('jpeg', 'jpg')
+            pasted.push(new File([blob], `pasted-${Date.now()}-${pasted.length}.${ext}`, { type: item.type }))
+          }
+        }
+      }
+      if (!pasted.length) return
+      e.preventDefault()
+      setImageFiles([...imageFiles, ...pasted])
+      setImageSourcingStatus('idle')
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [imageFiles, setImageFiles])
 
   const canGenerate = !isLoading && (() => {
     if (postType === 'product') return manualItems.some((it) => it.name.trim())
@@ -333,7 +358,7 @@ function LeftPanel({
             isDragging ? 'border-blue-400 bg-blue-50 text-blue-500' : 'border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-500'
           }`}
         >
-          {isDragging ? '여기에 놓으세요' : '클릭하거나 드래그해서 이미지 첨부'}
+          {isDragging ? '여기에 놓으세요' : '클릭 · 드래그 · 붙여넣기(Ctrl+V)로 이미지 첨부'}
         </div>
         <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => handleFiles(e.target.files)} />
         {imageFiles.length > 0 && (

@@ -97,6 +97,35 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
+// 서식 그대로 복사 — text/html 클립보드로 네이버·티스토리 에디터에 포맷+이미지가 바로 붙게.
+function RichCopyButton({ html, plain }: { html: string; plain: string }) {
+  const [copied, setCopied] = useState(false)
+  async function copy() {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plain || html], { type: 'text/plain' }),
+        }),
+      ])
+    } catch {
+      // 일부 브라우저/비보안 컨텍스트: 서식 복사 미지원 → 평문 폴백
+      await navigator.clipboard.writeText(plain || html)
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1800)
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+    >
+      {copied ? '복사됨 ✓ — 에디터에 Ctrl+V' : '📋 서식 그대로 복사'}
+    </button>
+  )
+}
+
 // ── 메인 페이지 ───────────────────────────────────────────────────────────────
 
 type Phase = 'loading' | 'ready' | 'publishing' | 'done' | 'error'
@@ -372,44 +401,57 @@ function PublishResultPanel({
     )
   }
 
-  // 폴백: 복사 내보내기
-  const content = activeTab === 'html' ? (result.html ?? '') : (result.markdown ?? '')
+  // 복사 발행 (반자동) — 서식 그대로 에디터에 붙여넣기
+  const sourceContent = activeTab === 'html' ? (result.html ?? '') : (result.markdown ?? '')
 
   return (
     <div className="space-y-3">
-      <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
-        네이버 API 연동 전입니다. 아래 내용을 복사해 네이버 블로그에 직접 붙여넣으세요.
+      <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+        완성된 글이에요. <b>서식 그대로 복사</b> 후 네이버·티스토리 글쓰기에 <b>Ctrl+V</b>로 붙여넣으면 끝.
       </div>
 
-      {/* 탭 */}
-      <div className="flex gap-1 rounded-lg bg-gray-100 p-1">
-        {(['html', 'markdown'] as const).map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            onClick={() => setActiveTab(tab)}
-            className={`flex-1 rounded-md py-1.5 text-xs font-medium transition-colors ${
-              activeTab === tab
-                ? 'bg-white text-gray-900 shadow-sm'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {tab.toUpperCase()}
-          </button>
-        ))}
-      </div>
+      <RichCopyButton html={result.html ?? ''} plain={result.markdown ?? ''} />
 
-      <div className="relative">
-        <textarea
-          readOnly
-          value={content}
-          rows={16}
-          className="w-full rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs leading-relaxed text-gray-700 focus:outline-none"
-        />
-        <div className="absolute right-2 top-2">
-          <CopyButton text={content} />
+      <p className="text-[11px] leading-relaxed text-gray-400">
+        제목·본문·서식은 그대로 붙습니다. 이미지는 <b>티스토리</b>는 대체로 함께 붙고,
+        <b>네이버</b>는 내가 찍은 사진을 다시 끌어다 넣어야 할 수 있어요 (사진은 이미 내 PC에 있으니 금방).
+      </p>
+
+      {/* 원본 소스 (티스토리 HTML 모드 등 고급용) */}
+      <details className="rounded-lg border border-gray-200">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-gray-500">
+          원본 소스 (HTML / 마크다운) — 고급
+        </summary>
+        <div className="space-y-2 p-3 pt-0">
+          <div className="flex gap-1 rounded-lg bg-gray-100 p-1">
+            {(['html', 'markdown'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`flex-1 rounded-md py-1.5 text-xs font-medium transition-colors ${
+                  activeTab === tab
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {tab.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <div className="relative">
+            <textarea
+              readOnly
+              value={sourceContent}
+              rows={12}
+              className="w-full rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs leading-relaxed text-gray-700 focus:outline-none"
+            />
+            <div className="absolute right-2 top-2">
+              <CopyButton text={sourceContent} />
+            </div>
+          </div>
         </div>
-      </div>
+      </details>
     </div>
   )
 }

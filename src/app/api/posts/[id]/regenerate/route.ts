@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { askClaude } from '@/lib/claude'
+import { HOOK_RULES, ANTI_AI_TONE, CURATION_COPY } from '@/lib/prompt-rules'
 import type { VoiceProfile, ScoreDetail, Highlight } from '@/types'
 
 const BLOG_FORMAT_RULES = `
@@ -62,7 +63,7 @@ export async function POST(
 
     const { data: post, error: postErr } = await supabase
       .from('posts')
-      .select('body_text, score_detail_json, voice_profiles(reusable_system_prompt)')
+      .select('body_text, post_type, score_detail_json, voice_profiles(reusable_system_prompt)')
       .eq('id', id)
       .single()
 
@@ -70,6 +71,7 @@ export async function POST(
 
     const row = post as unknown as {
       body_text: string | null
+      post_type: string | null
       score_detail_json: ScoreDetail | null
       voice_profiles: Pick<VoiceProfile, 'reusable_system_prompt'> | null
     }
@@ -85,7 +87,8 @@ export async function POST(
     await supabase.from('posts').update({ status: 'generating' }).eq('id', id)
 
     const body_text = await askClaude({
-      system: row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES,
+      system: row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES + HOOK_RULES + ANTI_AI_TONE
+        + (row.post_type === 'product' ? CURATION_COPY : ''),
       user: buildRegeneratePrompt(row.body_text, scoreDetail, feedback ?? ''),
     })
 

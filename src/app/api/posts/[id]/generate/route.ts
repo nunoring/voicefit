@@ -2,9 +2,9 @@ import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { askClaude } from '@/lib/claude'
-import { buildPlaceContext, fetchNaverImages, searchPlace } from '@/lib/naver-search'
-import { askClaudeVision } from '@/lib/claude'
-import type { ImageMediaType } from '@/lib/claude'
+import { buildPlaceContext, searchPlace } from '@/lib/naver-search'
+import type { PlaceSearchResult } from '@/lib/naver-search'
+import { HOOK_RULES, ANTI_AI_TONE, CURATION_COPY } from '@/lib/prompt-rules'
 import type { VoiceProfile, PostType, ProductData, PostImage, ProfileJson } from '@/types'
 
 const BLOG_FORMAT_RULES = `
@@ -66,6 +66,7 @@ const ANTI_HALLUCINATION = `
 - 쿠팡 파트너스, 구매 링크, 상품 구매 유도 문구 금지
 - "이 제품이", "이 제품을", "제품명", "구매하다", "구매 링크" 등 상품 리뷰 전용 표현 금지
   → 음식점/경험 리뷰라면 "이 집이", "여기가", "이 곳이" 등으로 표현할 것
+- 사진에 보이는 것을 메모·사실 근거 없이 '먹었다/했다/경험했다'로 단정하지 말 것.
 ------------------------------------------`
 
 // 이미지 타입 분류 (vision_interpretation 기반)
@@ -91,10 +92,13 @@ function buildImageSlotsText(images: PostImage[]): string {
     return `- <사진${i + 1}_${type}>: ${desc}`
   })
 
-  return `아래 사진들을 글 흐름에 맞게 자연스럽게 배치하세요.
-각 플레이스홀더(<사진N_타입>)는 해당 내용이 언급되는 문단 바로 뒤에 단독 라인으로 삽입.
-사진 앞뒤 문장에서 해당 사진 내용을 자연스럽게 언급할 것.
-모든 사진 반드시 포함.
+  return `아래는 첨부된 사진 목록이다. 글 흐름에 맞게 배치하되 '선별'한다.
+
+- 모든 사진을 다 넣을 필요 없다. 글에 가치를 더하는 사진만 고른다.
+- 서로 비슷한 사진(거의 같은 구도·피사체, 예: 반지 클로즈업 여러 장)은 대표 1장만 쓰고 나머지는 생략.
+- 굳이 없어도 글이 자연스러운 사진은 뺀다.
+- 매 사진마다 일일이 코멘트 달지 말 것. 비슷한 사진을 함께 넣을 땐 코멘트 하나로 합치거나 코멘트 없이 배치. 의미 있는 사진에만 자연스럽게 한마디.
+- 넣을 사진만 <사진N_타입> 플레이스홀더를 해당 문단 뒤 단독 라인으로 삽입. 뺄 사진의 플레이스홀더는 쓰지 않는다.
 
 ${slots.join('\n')}`
 }
@@ -215,6 +219,48 @@ ${buildImageSlotsText(images)}
 - 마지막 단락에 구매 유도 문구 포함`
 }
 
+// 가게리뷰 본문 맨 위 정보 헤더 — 주소·전화·지도 같은 '사실'은 코드가 직접 조립한다.
+// LLM에 맡기면 전화번호·주소를 지어낼 수 있어(할루시네이션) 금지. (✅-15/❌-17 원칙)
+function buildPlaceInfoHeader(place: PlaceSearchResult, placeLink?: string): string {
+  const d = place.detail
+  const b = place.basicInfo
+  const strip = (s?: string) => (s ? s.replace(/<[^>]+>/g, '').trim() : '')
+
+  const name = d?.name || strip(b?.title)
+  const category = d?.category || b?.category || ''
+  const address = d?.address || b?.roadAddress || b?.address || ''
+  const phone = d?.phone || b?.telephone || ''
+  const hours = d?.bizhourInfo || ''
+  const star = d?.starScore
+
+  // 신뢰할 기본정보가 없으면 헤더 생략(잘못된 정보 노출 방지)
+  if (!name && !address) return ''
+
+  const headline = [name && `**${name}**`, category].filter(Boolean).join(' · ')
+  const lines: string[] = []
+  if (headline) lines.push(star ? `${headline} · ⭐ ${star}` : headline)
+  if (address) lines.push(`📍 ${address}`)
+  if (phone) lines.push(`☎️ ${phone}`)
+  if (hours) lines.push(`🕒 ${hours}`)
+  // placeId 없어도 가게명으로 지도 검색 링크 폴백 — 지도 링크는 항상 노출
+  const mapLink = placeLink || (name ? `https://map.naver.com/p/search/${encodeURIComponent(name)}` : '')
+  if (mapLink) lines.push(`🗺️ [네이버 지도에서 보기](${mapLink})`)
+
+  return lines.join('\n')
+}
+
+// 헤더(+대문사진)를 본문 맨 위에 붙인다. 대문사진은 본문 인라인에서 1회 제거(중복 방지).
+function prependPlaceInfo(header: string, body: string, hasImages: boolean): string {
+  if (!header) return body
+  let cover = ''
+  let main = body
+  if (hasImages) {
+    cover = '![image-1]\n\n'
+    main = main.replace(/!\[image-1\]\s*\n*/, '') // 첫 인라인 1회만 제거
+  }
+  return `${cover}${header}\n\n${main}`
+}
+
 export async function POST(
   _req: NextRequest,
   ctx: RouteContext<'/api/posts/[id]/generate'>,
@@ -256,6 +302,7 @@ export async function POST(
 
     let finalImages = await queryImages()
     let userPrompt: string
+    let placeInfoHeader = '' // 가게리뷰일 때만 채워짐
 
     if (postType === 'daily') {
       const dailyContent = row.content_json?.daily_content ?? ''
@@ -270,70 +317,18 @@ export async function POST(
       // 플레이스 검색
       const placeResult = await searchPlace(place)
 
-      // 이미지 소싱 (직접 올린 게 없을 때)
-      if (!finalImages.length) {
-        // 1순위: 네이버 플레이스 방문자 사진 (최대 5장)
-        const candidateUrls: string[] = [
-          ...placeResult.placePhotos,                     // 플레이스 방문자 사진
-          ...(await fetchNaverImages(place, 5)),           // 부족하면 웹 검색으로 보충
-        ].slice(0, 5)
-
-        let idx = 0
-        for (const imageUrl of candidateUrls) {
-          if (idx >= 5) break
-          try {
-            const imgRes = await fetch(imageUrl, {
-              signal: AbortSignal.timeout(8000),
-              headers: { 'Referer': 'https://map.naver.com/' },
-            })
-            if (!imgRes.ok) continue
-            const contentType = imgRes.headers.get('content-type') ?? 'image/jpeg'
-            if (!contentType.startsWith('image/')) continue
-            const buffer = await imgRes.arrayBuffer()
-            if (buffer.byteLength < 5000) continue  // 너무 작은 이미지(오류 페이지 등) 건너뜀
-            const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg'
-            const storagePath = `${id}/place_${Date.now()}_${idx}.${ext}`
-            const { error: upErr } = await supabase.storage
-              .from('post-images').upload(storagePath, buffer, { contentType, upsert: false })
-            if (upErr) continue
-            const { data: { publicUrl } } = supabase.storage.from('post-images').getPublicUrl(storagePath)
-
-            // vision 분석 — 실제로 뭔 사진인지 파악
-            let visionInterpretation: string | null = null
-            let placementIndex: number | null = null
-            try {
-              const base64 = Buffer.from(buffer).toString('base64')
-              const mediaType = (contentType as ImageMediaType)
-              const visionResult = await askClaudeVision({
-                system: '이 사진이 무엇을 찍은 것인지 한 문장으로 설명하라. 예: "가게 외관", "카페 내부 좌석", "음식 사진 — 커피와 케이크". 한국어로.',
-                user: '이 사진을 한 문장으로 설명해줘.',
-                imageBase64: base64,
-                mediaType,
-              })
-              visionInterpretation = visionResult.trim()
-              // placement: 외관/간판 → 도입부(0), 음식/메뉴 → 중반(1), 내부/루프탑 → 후반(2)
-              placementIndex = /외관|간판|전경|입구|건물/.test(visionInterpretation) ? 0
-                : /음식|메뉴|커피|케이크|디저트/.test(visionInterpretation) ? 1
-                : 1
-            } catch { /* vision 실패해도 계속 */ }
-
-            await supabase.from('post_images').insert({
-              post_id: id, source_type: 'official',
-              storage_path: storagePath, public_url: publicUrl,
-              placement_index: placementIndex ?? idx,
-              vision_interpretation: visionInterpretation,
-            })
-            idx++
-          } catch { /* 계속 */ }
-        }
-        finalImages = await queryImages()
-      }
+      // 이미지: 사용자가 직접 올린 사진만 사용한다.
+      // 자동 소싱(네이버 방문자사진·이미지검색) 제거 — 제3자 저작권·약관 위반 리스크.
+      // 업로드 사진의 vision 코멘트는 images/interpret 경로에서 처리됨.
 
       // 플레이스 컨텍스트 + 링크
       const placeContext = await buildPlaceContext(place)
       const placeLink = placeResult.placeId
         ? `https://m.place.naver.com/place/${placeResult.placeId}`
         : undefined
+
+      // 본문 맨 위 정보 헤더(주소·전화·지도·대문사진) — 가게리뷰 한정
+      placeInfoHeader = buildPlaceInfoHeader(placeResult, placeLink)
 
       userPrompt = buildReviewPrompt(
         place, experience, placeContext, finalImages,
@@ -345,12 +340,19 @@ export async function POST(
       userPrompt = buildUserPrompt(row.product_data_json, finalImages)
     }
 
+    // 큐레이션(상품) 글에만 강한 카피 규칙 추가 — 방문기/일상엔 미적용(말투 차별점 유지)
+    const systemPrompt = row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES + HOOK_RULES + ANTI_AI_TONE
+      + (postType === 'product' ? CURATION_COPY : '')
     const rawText = await askClaude({
-      system: row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES,
+      system: systemPrompt,
       user: userPrompt,
     })
     // AI가 삽입한 <사진N_타입> 슬롯 → ![image-N] 변환
-    const body_text = resolveImageSlots(rawText, finalImages)
+    let body_text = resolveImageSlots(rawText, finalImages)
+    // 가게리뷰: 네이버 플레이스 정보(주소·전화·지도) + 대문사진을 맨 위에 코드로 조립
+    if (placeInfoHeader) {
+      body_text = prependPlaceInfo(placeInfoHeader, body_text, finalImages.length > 0)
+    }
 
     const { error: updateErr } = await supabase
       .from('posts')
