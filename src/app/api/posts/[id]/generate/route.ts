@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { askClaude } from '@/lib/claude'
 import { buildPlaceContext, searchPlace } from '@/lib/naver-search'
 import type { PlaceSearchResult } from '@/lib/naver-search'
-import { HOOK_RULES, ANTI_AI_TONE, CURATION_COPY } from '@/lib/prompt-rules'
+import { HOOK_RULES, ANTI_AI_TONE, CURATION_COPY, COUPANG_REVIEW_COPY } from '@/lib/prompt-rules'
 import type { VoiceProfile, PostType, ProductData, PostImage, ProfileJson } from '@/types'
 
 const BLOG_FORMAT_RULES = `
@@ -379,7 +379,7 @@ export async function POST(
 
     // 쿠팡 상품평은 블로그 서식·제목 룰 제외(평문·제목없음). 그 외엔 블로그 규칙 + 상품글엔 큐레이션 카피.
     const systemPrompt = postType === 'coupang'
-      ? row.voice_profiles.reusable_system_prompt + ANTI_AI_TONE
+      ? row.voice_profiles.reusable_system_prompt + ANTI_AI_TONE + COUPANG_REVIEW_COPY
       : row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES + HOOK_RULES + ANTI_AI_TONE
         + (postType === 'product' ? CURATION_COPY : '')
     const rawText = await askClaude({

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { askClaude } from '@/lib/claude'
-import { HOOK_RULES, ANTI_AI_TONE, CURATION_COPY } from '@/lib/prompt-rules'
+import { HOOK_RULES, ANTI_AI_TONE, CURATION_COPY, COUPANG_REVIEW_COPY } from '@/lib/prompt-rules'
 import type { VoiceProfile, ScoreDetail, Highlight } from '@/types'
 
 const BLOG_FORMAT_RULES = `
@@ -88,7 +88,7 @@ export async function POST(
 
     const body_text = await askClaude({
       system: row.post_type === 'coupang'
-        ? row.voice_profiles.reusable_system_prompt + ANTI_AI_TONE
+        ? row.voice_profiles.reusable_system_prompt + ANTI_AI_TONE + COUPANG_REVIEW_COPY
         : row.voice_profiles.reusable_system_prompt + BLOG_FORMAT_RULES + HOOK_RULES + ANTI_AI_TONE
           + (row.post_type === 'product' ? CURATION_COPY : ''),
       user: buildRegeneratePrompt(row.body_text, scoreDetail, feedback ?? ''),
