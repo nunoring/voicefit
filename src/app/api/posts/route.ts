@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { checkSupabaseDns } from '@/lib/supabase-health'
 import { insertLocalPost, listLocalPosts } from '@/lib/local-posts'
 import type { ProductData, PostType, PostCreateResponse, UsageBasis } from '@/types'
 
 export async function GET() {
   try {
+    const health = await checkSupabaseDns()
+    if (health.status !== 'ok') return NextResponse.json(await listLocalPosts())
+
     const supabase = createServerClient()
     const { data, error } = await supabase
       .from('posts')
@@ -64,6 +68,9 @@ export async function POST(req: NextRequest) {
       })
       return NextResponse.json({ id: local.id, status: local.status } satisfies PostCreateResponse, { status: 201 })
     }
+
+    const health = await checkSupabaseDns()
+    if (health.status !== 'ok') return createLocalResponse()
 
     const supabase = createServerClient()
     let data: unknown

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { askClaudeJSON, askClaude } from '@/lib/claude'
 import { createServerClient } from '@/lib/supabase'
+import { checkSupabaseDns } from '@/lib/supabase-health'
 import {
   buildMockProfile,
   buildMockReusableSystemPrompt,
@@ -169,6 +170,9 @@ export async function POST(req: NextRequest) {
       } satisfies VoiceProfileCreateResponse, { status: 201 })
     }
 
+    const health = await checkSupabaseDns()
+    if (health.status !== 'ok') return saveLocalResponse()
+
     // 3. DB insert
     const supabase = createServerClient()
     let data: unknown
@@ -207,6 +211,9 @@ export async function POST(req: NextRequest) {
 
 export async function GET() {
   try {
+    const health = await checkSupabaseDns()
+    if (health.status !== 'ok') return NextResponse.json(await listLocalVoiceProfiles())
+
     const supabase = createServerClient()
     const { data, error } = await supabase
       .from('voice_profiles')
