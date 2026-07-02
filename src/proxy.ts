@@ -21,7 +21,7 @@ function handleShareAccess(req: NextRequest) {
 
   const url = req.nextUrl.clone()
   url.pathname = '/access'
-  url.searchParams.set('next', `${pathname}${search}`)
+  url.searchParams.set('next', pathname === '/' ? '/dashboard' : `${pathname}${search}`)
   return NextResponse.redirect(url)
 }
 

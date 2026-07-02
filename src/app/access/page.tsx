@@ -5,7 +5,10 @@ import { useSearchParams } from 'next/navigation'
 
 function AccessForm() {
   const searchParams = useSearchParams()
-  const next = searchParams.get('next') || '/dashboard'
+  const requestedNext = searchParams.get('next') || '/dashboard'
+  const next = !requestedNext || requestedNext === '/' || !requestedNext.startsWith('/')
+    ? '/dashboard'
+    : requestedNext
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
