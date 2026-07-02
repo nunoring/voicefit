@@ -209,6 +209,31 @@ test('사용 단어를 피한 체험담 우회 표현들 → fail (not_used)', (
   }
 })
 
+test('브리프 지정 체험담 표현들 → fail (not_used)', () => {
+  // CEO 검수 브리프에서 직접 지정한 fail 예시 + 우회 변형
+  const fake = [
+    '며칠 사용해봤는데', '실제로 사용하면서', '손이 자주 갔어요', '재구매 의사',
+    '내돈내산', '쓰고 있는데', '사용하고 있어요', '사용해봤더니',
+  ]
+  for (const phrase of fake) {
+    const body = MOCK_NOT_USED + `\n${phrase} 만족스러웠어요.`
+    const result = auditCommercePack(body, 'not_used')
+    const hasFail = result.findings.some(f => f.id === 'fake_usage_claim' && f.severity === 'fail')
+    assert(hasFail, `"${phrase}" → fake_usage_claim fail 없음`)
+  }
+})
+
+test('체험담 오탐 방지: 통계/타인 언급은 fail 아님 (not_used)', () => {
+  // "재구매율", "사용해보신 분들" 같은 3자 시점·통계 언급은 개인 체험 주장이 아님
+  const safe = ['재구매율이 높은 상품이에요.', '먼저 사용해보신 분들 후기를 보면 평이 좋아요.']
+  for (const sentence of safe) {
+    const body = MOCK_NOT_USED + `\n${sentence}`
+    const result = auditCommercePack(body, 'not_used')
+    const hasFail = result.findings.some(f => f.id === 'fake_usage_claim')
+    assert(!hasFail, `오탐: "${sentence}" → fake_usage_claim`)
+  }
+})
+
 test('모든 섹션 누락 → 전체 section_missing fail', () => {
   const result = auditCommercePack('섹션 없는 본문.', null)
   const missingFails = result.findings.filter(f => f.id.startsWith('section_missing_') && f.severity === 'fail')

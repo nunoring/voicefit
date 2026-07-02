@@ -202,7 +202,7 @@ ${structure}
 ${ANTI_HALLUCINATION}`
 }
 
-function buildUserPrompt(product: ProductData, images: PostImage[]): string {
+function buildUserPrompt(product: ProductData, images: PostImage[], usageBasis: UsageBasis): string {
   const itemsText = product.items
     .map(
       (item, i) =>
@@ -214,6 +214,8 @@ function buildUserPrompt(product: ProductData, images: PostImage[]): string {
 
 ## 사진
 ${buildImageSlotsText(images)}
+
+${usageBasisInstruction(usageBasis)}
 
 ## 요구사항
 - 마크다운 형식, 최소 800자
@@ -398,7 +400,8 @@ export async function POST(
         if (!localPost.product_data_json?.items?.length) {
           throw new Error('상품 데이터가 없습니다.')
         }
-        userPrompt = buildUserPrompt(localPost.product_data_json, localImages)
+        // product 홍보글도 사용 여부 지침 적용 — 안 써본 상품의 "직접 써보니" 생성 방지 (기본 curation)
+        userPrompt = buildUserPrompt(localPost.product_data_json, localImages, localPost.content_json?.usage_basis ?? 'curation')
       }
 
       const voiceFingerprint = buildVoiceFingerprintRules(localProfile.profile_json)
@@ -512,7 +515,8 @@ export async function POST(
 
     } else {
       if (!row.product_data_json?.items?.length) throw new Error('상품 데이터가 없습니다.')
-      userPrompt = buildUserPrompt(row.product_data_json, finalImages)
+      // product 홍보글도 사용 여부 지침 적용 — 안 써본 상품의 "직접 써보니" 생성 방지 (기본 curation)
+      userPrompt = buildUserPrompt(row.product_data_json, finalImages, row.content_json?.usage_basis ?? 'curation')
     }
 
     // 쿠팡 상품평은 블로그 서식·제목 룰 제외(평문·제목없음). 그 외엔 블로그 규칙 + 상품글·커머스패키지엔 큐레이션 카피.

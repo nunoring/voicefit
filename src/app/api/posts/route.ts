@@ -48,12 +48,12 @@ export async function POST(req: NextRequest) {
     }
     const voiceProfileId = voice_profile_id
 
-    // 글 유형별 content_json 구성
+    // 글 유형별 content_json 구성 — 상품 계열(product/commerce_pack)은 사용 여부를 함께 저장
     const content_json =
       post_type === 'daily' ? { daily_content } :
       post_type === 'review' ? { review_place, review_experience } :
       post_type === 'coupang' ? { coupang_product, coupang_experience } :
-      post_type === 'commerce_pack' ? { usage_basis: usage_basis ?? 'curation' } :
+      (post_type === 'commerce_pack' || post_type === 'product' || !post_type) ? { usage_basis: usage_basis ?? 'curation' } :
       null
 
     const postType = post_type ?? 'product'

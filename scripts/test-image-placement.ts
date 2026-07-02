@@ -110,6 +110,32 @@ test('infers placement from image type when vision has no placement index', () =
   assert(inferredPlacementIndex(image({ vision_interpretation: '음식이 테이블 위에 있다' })) === 1, 'food placement failed')
 })
 
+test('resolves type-less and spaced slot variants (<사진1>, <사진 2>)', () => {
+  const body = ['첫 문단', '<사진1>', '중간', '<사진 2>', '끝'].join('\n\n')
+  const resolved = resolveImageSlots(body, [image({ id: 'img_1' }), image({ id: 'img_2' })])
+  assert(resolved.includes('![image-1]'), resolved)
+  assert(resolved.includes('![image-2]'), resolved)
+  assert(!resolved.includes('<사진'), `잔여 슬롯 텍스트 남음: ${resolved}`)
+})
+
+test('strips leftover malformed photo tokens instead of publishing them as text', () => {
+  const body = ['본문', '<사진_외관>', '마무리'].join('\n\n')
+  const resolved = resolveImageSlots(body, [])
+  assert(!resolved.includes('<사진'), `잔여 슬롯 텍스트 남음: ${resolved}`)
+})
+
+test('distributes official product images mid-body when model omits placeholders', () => {
+  // 공식 이미지 URL만 있는 상품 홍보글 시나리오: vision/placement 없음 → 제품 타입 추론 → 중반 배치
+  const body = ['도입', '특징 설명', '구성 정리', '추천 대상', '마무리'].join('\n\n')
+  const resolved = resolveImageSlots(body, [
+    image({ id: 'img_official', source_type: 'official', vision_interpretation: '제품 본품과 패키지 이미지' }),
+  ])
+  const paras = resolved.split(/\n{2,}/)
+  const markerIndex = paras.findIndex((p) => p.includes('![image-1]'))
+  assert(markerIndex > 0, `이미지가 맨 위에 몰림: ${resolved}`)
+  assert(markerIndex < paras.length - 1, `이미지가 맨 끝에 몰림: ${resolved}`)
+})
+
 console.log(`\nResult: ${passed} passed, ${failed} failed\n`)
 if (failed > 0) {
   process.exit(1)

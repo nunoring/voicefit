@@ -263,12 +263,13 @@ function ReviewPageInner() {
     }
   }, [postId])
 
-  // 포스트 로드 완료 + commerce_pack이면 자동 1회 실행
+  // 포스트 로드 완료 + 상품 계열(commerce_pack/product)이면 자동 1회 실행
+  const auditablePostType = post?.post_type === 'commerce_pack' || post?.post_type === 'product'
   useEffect(() => {
-    if (!(post?.post_type === 'commerce_pack' && phase === 'ready' && !auditResult && !auditLoading)) return
+    if (!(auditablePostType && phase === 'ready' && !auditResult && !auditLoading)) return
     const t = setTimeout(() => { runAudit() }, 0)
     return () => clearTimeout(t)
-  }, [post, phase, auditResult, auditLoading, runAudit])
+  }, [auditablePostType, phase, auditResult, auditLoading, runAudit])
 
   // 체크박스 토글 + 서버 저장
   const toggleItem = useCallback(
@@ -290,11 +291,16 @@ function ReviewPageInner() {
 
   async function handlePublish() {
     if (!postId) return
-    if (post?.post_type === 'commerce_pack' && auditResult?.overall === 'fail') {
+    if (auditablePostType && auditResult?.overall === 'fail') {
       setError('정책 감사 fail 항목을 먼저 수정한 뒤 발행하세요.')
       return
     }
-    if (post?.match_score != null && post.match_score < VOICE_SCORE_PASS) {
+    // 미채점(null)도 차단 — 재생성 후 점수 리셋 상태로 발행되는 우회 방지 (서버 게이트와 동일 규칙)
+    if (post?.match_score == null) {
+      setError('말투 점수가 없습니다. 생성 화면에서 채점을 먼저 통과한 뒤 발행하세요.')
+      return
+    }
+    if (post.match_score < VOICE_SCORE_PASS) {
       setError(`말투 점수가 ${VOICE_SCORE_PASS}점 미만입니다. AI티 위험이 있어 재생성 또는 수정 후 다시 채점하세요.`)
       return
     }
@@ -325,9 +331,10 @@ function ReviewPageInner() {
   const doneCount = items.filter((it) => it.checked).length
   const allPassed = doneCount === items.length && items.length > 0
   const isLoading = phase === 'loading' || phase === 'publishing'
-  const auditBlocked = post?.post_type === 'commerce_pack' && auditResult?.overall === 'fail'
-  const auditPending = post?.post_type === 'commerce_pack' && auditLoading
-  const voiceScoreBlocked = post?.match_score != null && post.match_score < VOICE_SCORE_PASS
+  const auditBlocked = auditablePostType && auditResult?.overall === 'fail'
+  const auditPending = auditablePostType && auditLoading
+  // 미채점(null)도 발행 차단 대상
+  const voiceScoreBlocked = !!post && (post.match_score == null || post.match_score < VOICE_SCORE_PASS)
 
   // ── post_id 파라미터 없음 ──
   if (!postId) {
@@ -433,15 +440,15 @@ function ReviewPageInner() {
             )
           })}
 
-          {/* 정책 감사 (commerce_pack 전용) */}
-          {post?.post_type === 'commerce_pack' && (
+          {/* 정책 감사 (commerce_pack / product) */}
+          {auditablePostType && (
             <CommerceAuditPanel result={auditResult} loading={auditLoading} onRerun={runAudit} />
           )}
 
           {/* 발행 버튼 */}
           <div className="mt-4 border-t border-gray-100 pt-4">
-            {/* commerce_pack audit fail → 발행 전 수동 확인 필요 경고 */}
-            {post?.post_type === 'commerce_pack' && auditResult?.overall === 'fail' && phase !== 'done' && (
+            {/* audit fail → 발행 전 수동 확인 필요 경고 */}
+            {auditablePostType && auditResult?.overall === 'fail' && phase !== 'done' && (
               <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3">
                 <p className="text-xs font-semibold text-red-700">⚠️ 정책 감사에서 수정 필요 항목이 발견됐습니다</p>
                 <p className="mt-0.5 text-[11px] text-red-600">위 정책 감사 결과를 수정하고 다시 검사해야 발행할 수 있습니다.</p>
@@ -449,8 +456,14 @@ function ReviewPageInner() {
             )}
             {voiceScoreBlocked && phase !== 'done' && (
               <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3">
-                <p className="text-xs font-semibold text-red-700">말투 점수가 낮습니다</p>
-                <p className="mt-0.5 text-[11px] text-red-600">AI티 위험이 있어 {VOICE_SCORE_PASS}점 이상으로 다시 채점된 뒤 발행할 수 있습니다.</p>
+                <p className="text-xs font-semibold text-red-700">
+                  {post?.match_score == null ? '말투 점수가 아직 없습니다' : '말투 점수가 낮습니다'}
+                </p>
+                <p className="mt-0.5 text-[11px] text-red-600">
+                  {post?.match_score == null
+                    ? '생성 화면에서 채점을 먼저 통과해야 발행할 수 있습니다. (재생성 후에는 점수가 리셋됩니다)'
+                    : `AI티 위험이 있어 ${VOICE_SCORE_PASS}점 이상으로 다시 채점된 뒤 발행할 수 있습니다.`}
+                </p>
               </div>
             )}
             {phase !== 'done' && (
@@ -498,7 +511,7 @@ function ReviewPageInner() {
                 {phase === 'publishing'
                   ? '발행 중…'
                   : voiceScoreBlocked
-                  ? '말투 재생성 필요'
+                  ? (post?.match_score == null ? '말투 채점 필요' : '말투 재생성 필요')
                   : auditBlocked
                   ? '정책 감사 수정 필요'
                   : auditPending

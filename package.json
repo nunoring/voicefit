@@ -10,7 +10,8 @@
     "test:commerce": "tsx scripts/test-commerce-pack.ts",
     "test:image": "tsx scripts/test-image-placement.ts",
     "test:shorts": "tsx scripts/test-shorts-render-plan.ts",
-    "test:voice": "tsx scripts/test-voice-profile.ts"
+    "test:voice": "tsx scripts/test-voice-profile.ts",
+    "test:publish": "tsx scripts/test-publish-gate.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.98.0",

@@ -419,7 +419,7 @@ function LeftPanel({
             </div>
           </div>
 
-          {postType === 'commerce_pack' && (
+          {(postType === 'commerce_pack' || postType === 'product') && (
             <div>
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">이 상품, 직접 써봤나요?</p>
               <div className="flex gap-2">
@@ -691,7 +691,8 @@ function GeneratePageInner() {
             image_url: it.image_url || undefined,
           })),
         },
-        ...(postType === 'commerce_pack' ? { usage_basis: usageBasis } : {}),
+        // product도 사용 여부를 함께 저장 — 생성 프롬프트·정책 감사가 체험담 표현 허용 여부를 가른다
+        usage_basis: usageBasis,
       }
     }
     if (postType === 'daily') return { daily_content: dailyContent }

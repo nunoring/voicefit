@@ -55,6 +55,10 @@ const FAKE_USAGE_PHRASES = [
   '개봉해보니', '언박싱해보니', '뜯어보니', '받자마자', '도착하자마자', '집에서 써', '며칠간 써',
   '일주일 써', '한달 써', '발라보니', '입어보니', '신어보니', '먹어보니', '마셔보니', '손에 잡히는 느낌',
   '제 손에', '제 피부에', '제 머리에', '제 방에 두고', '제가 써', '제가 사용',
+  // 추가 (v5) — 검수 브리프 지정 표현 + 진행형/재구매 계열.
+  // 오탐 주의: '재구매율'(통계), '사용해보신 분들'(3자 시점)은 잡히면 안 되므로 bare '재구매'/'사용'은 넣지 않는다.
+  '사용해봤는데', '사용해봤더니', '실제로 사용', '손이 자주 갔', '재구매 의사', '재구매할', '또 사고 싶',
+  '쓰고 있는데', '쓰고 있어요', '사용하고 있어요', '사용하고 있는데', '내돈내산', '애용하',
 ]
 
 const RISKY_ABSOLUTE_PHRASES = [
@@ -74,6 +78,67 @@ const SUSPICIOUS_CLAIM_PATTERNS: { id: string; pattern: RegExp; label: string }[
 function firstNonEmptyLine(section: string | undefined): string {
   if (!section) return ''
   return section.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? ''
+}
+
+/** 섹션 구조와 무관한 본문 텍스트 정책 검사 — commerce_pack·product 감사가 공유. */
+function collectTextPolicyFindings(bodyText: string, usageBasis: string | null | undefined): AuditFinding[] {
+  const findings: AuditFinding[] = []
+
+  // 사용 안 함인데 1인칭 사용후기 표현
+  if (usageBasis && usageBasis !== 'used') {
+    const found = FAKE_USAGE_PHRASES.filter((p) => bodyText.includes(p))
+    if (found.length) {
+      findings.push({
+        id: 'fake_usage_claim',
+        severity: 'fail',
+        message: `직접 사용 안 함(${usageBasis})인데 사용후기 표현이 있습니다: ${found.join(', ')}`,
+      })
+    }
+  }
+
+  // 위험한 절대 표현
+  const riskyFound = RISKY_ABSOLUTE_PHRASES.filter((p) => bodyText.includes(p))
+  if (riskyFound.length) {
+    findings.push({
+      id: 'risky_absolute_phrases',
+      severity: 'warn',
+      message: `과장·강매성 표현이 있습니다: ${riskyFound.join(', ')}`,
+    })
+  }
+
+  // 입력에 없을 가능성 높은 수치/효능 주장 (의심 — 사람이 직접 대조 확인 필요)
+  for (const { id, pattern, label } of SUSPICIOUS_CLAIM_PATTERNS) {
+    if (pattern.test(bodyText)) {
+      findings.push({
+        id: `suspicious_${id}`,
+        severity: 'warn',
+        message: `${label}으로 의심되는 표현이 있습니다 — 상품 정보에 실제로 있는 수치인지 직접 대조 확인하세요.`,
+      })
+    }
+  }
+
+  return findings
+}
+
+function finalizeAudit(findings: AuditFinding[]): AuditResult {
+  if (!findings.length) {
+    findings.push({ id: 'all_clear', severity: 'pass', message: '규칙 기반 검사에서 발견된 문제가 없습니다. (사람 검수는 별도로 필요)' })
+  }
+  const overall: AuditSeverity = findings.some((f) => f.severity === 'fail')
+    ? 'fail'
+    : findings.some((f) => f.severity === 'warn')
+    ? 'warn'
+    : 'pass'
+  return { overall, findings }
+}
+
+/**
+ * 섹션 없는 단일 글(product 상품 홍보글) 정책 감사. AI 호출 없음.
+ * 섹션·고지 위치 검사는 없음 — product 고지는 publish 단계에서 코드가 자동 삽입(appendLegalDisclosureIfNeeded).
+ * usageBasis가 'used'가 아니면 1인칭 사용후기 표현을 fail로 잡는다 (기본값 curation 권장).
+ */
+export function auditPlainPost(bodyText: string, usageBasis: string | null | undefined): AuditResult {
+  return finalizeAudit(collectTextPolicyFindings(bodyText, usageBasis))
 }
 
 /**
@@ -119,50 +184,10 @@ export function auditCommercePack(bodyText: string, usageBasis: string | null | 
     }
   }
 
-  // 5) 사용 안 함인데 1인칭 사용후기 표현
-  if (usageBasis && usageBasis !== 'used') {
-    const found = FAKE_USAGE_PHRASES.filter((p) => bodyText.includes(p))
-    if (found.length) {
-      findings.push({
-        id: 'fake_usage_claim',
-        severity: 'fail',
-        message: `직접 사용 안 함(${usageBasis})인데 사용후기 표현이 있습니다: ${found.join(', ')}`,
-      })
-    }
-  }
+  // 5~7) 본문 텍스트 정책 검사 (product 감사와 공유)
+  findings.push(...collectTextPolicyFindings(bodyText, usageBasis))
 
-  // 6) 위험한 절대 표현
-  const riskyFound = RISKY_ABSOLUTE_PHRASES.filter((p) => bodyText.includes(p))
-  if (riskyFound.length) {
-    findings.push({
-      id: 'risky_absolute_phrases',
-      severity: 'warn',
-      message: `과장·강매성 표현이 있습니다: ${riskyFound.join(', ')}`,
-    })
-  }
-
-  // 7) 입력에 없을 가능성 높은 수치/효능 주장 (의심 — 사람이 직접 대조 확인 필요)
-  for (const { id, pattern, label } of SUSPICIOUS_CLAIM_PATTERNS) {
-    if (pattern.test(bodyText)) {
-      findings.push({
-        id: `suspicious_${id}`,
-        severity: 'warn',
-        message: `${label}으로 의심되는 표현이 있습니다 — 상품 정보에 실제로 있는 수치인지 직접 대조 확인하세요.`,
-      })
-    }
-  }
-
-  if (!findings.length) {
-    findings.push({ id: 'all_clear', severity: 'pass', message: '규칙 기반 검사에서 발견된 문제가 없습니다. (사람 검수는 별도로 필요)' })
-  }
-
-  const overall: AuditSeverity = findings.some((f) => f.severity === 'fail')
-    ? 'fail'
-    : findings.some((f) => f.severity === 'warn')
-    ? 'warn'
-    : 'pass'
-
-  return { overall, findings }
+  return finalizeAudit(findings)
 }
 
 // ── Mock 생성 모드 ───────────────────────────────────────────────────────────

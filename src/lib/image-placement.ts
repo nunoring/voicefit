@@ -52,10 +52,14 @@ ${slots.join('\n')}`
 }
 
 export function resolveImageSlots(bodyText: string, images: PostImage[]): string {
-  const resolved = bodyText.replace(/<사진(\d+)_[^>]*>/g, (_, n) => {
+  // 모델이 타입을 생략하거나(<사진1>) 공백을 넣어도(<사진 1>) 해석되게 변형 허용.
+  // 매칭 안 되는 슬롯이 본문에 텍스트로 남아 발행되는 사고 방지.
+  let resolved = bodyText.replace(/<사진\s*(\d+)(?:_[^>]*)?>/g, (_, n) => {
     const idx = parseInt(n, 10) - 1
     return idx >= 0 && idx < images.length ? `![image-${n}]` : ''
   })
+  // 그 외 잔여 <사진…> 토큰은 전부 제거 (숫자 없는 변형 등)
+  resolved = resolved.replace(/<사진[^>]*>/g, '')
 
   const hasMarkers = /!\[image-\d+\]/.test(resolved)
   if (!hasMarkers && images.length) {

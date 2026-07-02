@@ -1,13 +1,11 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { auditCommercePack } from '@/lib/commerce-pack'
+import { checkPublishGate } from '@/lib/publish-gate'
 import { markdownToHtml, buildImageUrlMap, appendLegalDisclosureIfNeeded } from '@/lib/markdown'
 import { getLocalPost, updateLocalPost } from '@/lib/local-posts'
 import { listLocalPostImages } from '@/lib/local-post-images'
 import type { Post, PublishApiResult, PublishPlatform, UsageBasis } from '@/types'
-
-const VOICE_SCORE_PASS = 75
 
 // ── 라우트 핸들러 ─────────────────────────────────────────────────────────────
 
@@ -25,26 +23,24 @@ export async function POST(
       if (!post) {
         return NextResponse.json({ error: '포스트를 찾을 수 없습니다.' }, { status: 404 })
       }
-      if (!post.body_text) throw new Error('발행할 본문이 없습니다.')
-      if (post.match_score != null && post.match_score < VOICE_SCORE_PASS) {
+      const bodyText = post.body_text ?? ''
+      const gate = checkPublishGate({
+        post_type: post.post_type,
+        body_text: bodyText,
+        match_score: post.match_score,
+        usage_basis: post.content_json?.usage_basis ?? null,
+        platform: platform ?? null,
+      })
+      if (!gate.ok) {
         return NextResponse.json(
-          { error: `말투 점수가 ${VOICE_SCORE_PASS}점 미만입니다. AI티 위험이 있어 재생성 또는 수정 후 다시 채점하세요.` },
-          { status: 422 },
+          { error: gate.error, ...(gate.audit ? { audit: gate.audit } : {}) },
+          { status: gate.status },
         )
-      }
-      if (post.post_type === 'commerce_pack') {
-        const audit = auditCommercePack(post.body_text, post.content_json?.usage_basis ?? null)
-        if (audit.overall === 'fail') {
-          return NextResponse.json(
-            { error: '정책 감사 fail 항목이 있어 발행할 수 없습니다.', audit },
-            { status: 422 },
-          )
-        }
       }
 
       const imageUrls = buildImageUrlMap(await listLocalPostImages(id))
-      const rawHtml = markdownToHtml(post.body_text, imageUrls)
-      const html = appendLegalDisclosureIfNeeded(rawHtml, post.body_text, post.post_type)
+      const rawHtml = markdownToHtml(bodyText, imageUrls)
+      const html = appendLegalDisclosureIfNeeded(rawHtml, bodyText, post.post_type)
       const published_url = platform === 'tistory' ? (tistory_url || undefined) : undefined
       await updateLocalPost(id, {
         status: 'published',
@@ -55,7 +51,7 @@ export async function POST(
       const result: PublishApiResult = {
         published: false,
         html,
-        markdown: post.body_text,
+        markdown: bodyText,
         platform,
         published_url,
         status: 'published',
@@ -77,21 +73,19 @@ export async function POST(
       content_json: { usage_basis?: UsageBasis } | null
     }
 
-    if (!post.body_text) throw new Error('발행할 본문이 없습니다.')
-    if (post.match_score != null && post.match_score < VOICE_SCORE_PASS) {
+    const bodyText = post.body_text ?? ''
+    const gate = checkPublishGate({
+      post_type: post.post_type,
+      body_text: bodyText,
+      match_score: post.match_score,
+      usage_basis: post.content_json?.usage_basis ?? null,
+      platform: platform ?? null,
+    })
+    if (!gate.ok) {
       return NextResponse.json(
-        { error: `말투 점수가 ${VOICE_SCORE_PASS}점 미만입니다. AI티 위험이 있어 재생성 또는 수정 후 다시 채점하세요.` },
-        { status: 422 },
+        { error: gate.error, ...(gate.audit ? { audit: gate.audit } : {}) },
+        { status: gate.status },
       )
-    }
-    if (post.post_type === 'commerce_pack') {
-      const audit = auditCommercePack(post.body_text, post.content_json?.usage_basis ?? null)
-      if (audit.overall === 'fail') {
-        return NextResponse.json(
-          { error: '정책 감사 fail 항목이 있어 발행할 수 없습니다.', audit },
-          { status: 422 },
-        )
-      }
     }
 
     // 이미지 URL 맵: placement_index 오름차순 → created_at 오름차순으로 정렬된 배열을
@@ -104,15 +98,17 @@ export async function POST(
       .order('created_at', { ascending: true })
 
     const imageUrls = buildImageUrlMap((imgRows ?? []) as { public_url: string }[])
-    const rawHtml = markdownToHtml(post.body_text, imageUrls)
+    const rawHtml = markdownToHtml(bodyText, imageUrls)
     // 쿠팡 파트너스 법적 공시는 product/commerce_pack에 추가 (본문에 이미 있으면 중복 삽입 안 함)
-    const html = appendLegalDisclosureIfNeeded(rawHtml, post.body_text, post.post_type)
-    const title = (post.body_text.split('\n').find((l) => l.trim()) ?? '')
+    const html = appendLegalDisclosureIfNeeded(rawHtml, bodyText, post.post_type)
+    const title = (bodyText.split('\n').find((l) => l.trim()) ?? '')
       .replace(/^#+\s*/, '')
       .slice(0, 80)
 
     // ── Playwright 자동 포스팅 시도 (로컬 전용, 환경변수 활성화 시) ──────────
-    if (process.env.ALLOW_NAVER_AUTOMATION === '1' && !process.env.VERCEL) {
+    // platform !== 'naver'면 시도 자체를 안 함 — 사용자가 티스토리/수동을 골랐는데
+    // 네이버로 자동 발행되던 버그 수정.
+    if (process.env.ALLOW_NAVER_AUTOMATION === '1' && !process.env.VERCEL && platform === 'naver') {
       try {
         const { publishToNaver } = await import('@/lib/naver-publisher')
         const naverResult = await publishToNaver({ title, bodyHtml: html })
@@ -149,7 +145,7 @@ export async function POST(
     const result: PublishApiResult = {
       published: false,
       html,
-      markdown: post.body_text,
+      markdown: bodyText,
       platform,
       published_url,
       status: 'published',
