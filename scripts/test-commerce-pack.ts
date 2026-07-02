@@ -12,6 +12,7 @@
 
 import {
   splitCommerceSections,
+  replaceCommerceSection,
   auditCommercePack,
   buildMockCommercePackBody,
   COMMERCE_SECTION_HEADERS,
@@ -93,6 +94,21 @@ test('product 타입 본문 → 빈 객체 (의도치 않은 섹션 파싱 없�
   const productBody = '# 상품 리뷰\n이 상품을 써봤습니다.\n\n상품 설명이 이어집니다.'
   const sections = splitCommerceSections(productBody)
   assert(Object.keys(sections).length === 0, 'product 본문에서 commerce 섹션이 파싱됨')
+})
+
+test('블로그 글 섹션만 교체하고 나머지 섹션 보존', () => {
+  const next = '# 바뀐 블로그 글\n\n말투만 다시 입힌 본문입니다.'
+  const replaced = replaceCommerceSection(MOCK_NOT_USED, '블로그 글', next)
+  const sections = splitCommerceSections(replaced)
+  assert(sections['블로그 글'] === next, '블로그 글 섹션 교체 실패')
+  assert((sections['쇼츠 대본'] ?? '').includes('[0-3초]'), '쇼츠 대본 섹션이 손상됨')
+  assert((sections['발행 전 체크리스트'] ?? '').includes('- [ ]'), '체크리스트 섹션이 손상됨')
+})
+
+test('없는 섹션 교체 요청 → 원문 유지', () => {
+  const body = '# 섹션 없는 상품글\n본문'
+  const replaced = replaceCommerceSection(body, '블로그 글', '새 본문')
+  assert(replaced === body, '없는 섹션인데 원문이 바뀜')
 })
 
 // ── 2. auditCommercePack ──────────────────────────────────────────────────────

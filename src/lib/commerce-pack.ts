@@ -30,6 +30,38 @@ export function splitCommerceSections(markdown: string): Partial<Record<Commerce
   return sections
 }
 
+export function replaceCommerceSection(
+  markdown: string,
+  header: CommerceSectionHeader,
+  nextBody: string,
+): string {
+  const lines = (markdown ?? '').split('\n')
+  const isKnownHeading = (line: string) => {
+    const match = /^##\s+(.+?)\s*$/.exec(line)
+    const heading = match?.[1]?.trim()
+    return heading ? (COMMERCE_SECTION_HEADERS as readonly string[]).includes(heading) : false
+  }
+  const targetIndex = lines.findIndex((line) => /^##\s+(.+?)\s*$/.exec(line)?.[1]?.trim() === header)
+  if (targetIndex < 0) return markdown
+
+  let endIndex = lines.length
+  for (let i = targetIndex + 1; i < lines.length; i++) {
+    if (isKnownHeading(lines[i])) {
+      endIndex = i
+      break
+    }
+  }
+
+  const replacement = nextBody.trim().split('\n')
+  return [
+    ...lines.slice(0, targetIndex + 1),
+    '',
+    ...replacement,
+    '',
+    ...lines.slice(endIndex),
+  ].join('\n').replace(/\n{4,}/g, '\n\n\n')
+}
+
 // ── 정책 감사 ────────────────────────────────────────────────────────────────
 
 export type AuditSeverity = 'pass' | 'warn' | 'fail'

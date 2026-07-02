@@ -6,6 +6,13 @@ import { getLocalPost, updateLocalPost } from '@/lib/local-posts'
 import { listLocalPostImages } from '@/lib/local-post-images'
 import type { Post } from '@/types'
 
+function buildBodyPatch(currentBody: string | null | undefined, nextBody: string) {
+  const changed = (currentBody ?? '') !== nextBody
+  return changed
+    ? { body_text: nextBody, status: 'scored' as const, match_score: null, score_detail_json: null }
+    : { body_text: nextBody, status: 'scored' as const }
+}
+
 export async function GET(_req: NextRequest, ctx: RouteContext<'/api/posts/[id]'>) {
   try {
     const { id } = await ctx.params
@@ -67,12 +74,11 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/posts/[id]
     }
 
     if (id.startsWith('local_post_')) {
-      const post = await updateLocalPost(id, {
-        body_text: bodyText,
-        status: 'scored',
-        match_score: null,
-        score_detail_json: null,
-      })
+      const current = await getLocalPost(id)
+      if (!current) {
+        return NextResponse.json({ error: '포스트를 찾을 수 없습니다.' }, { status: 404 })
+      }
+      const post = await updateLocalPost(id, buildBodyPatch(current.body_text, bodyText))
       if (!post) {
         return NextResponse.json({ error: '포스트를 찾을 수 없습니다.' }, { status: 404 })
       }
@@ -80,9 +86,17 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/posts/[id]
     }
 
     const supabase = createServerClient()
+    const { data: current, error: currentErr } = await supabase
+      .from('posts')
+      .select('body_text')
+      .eq('id', id)
+      .single()
+
+    if (currentErr) throw new Error(currentErr.message)
+
     const { data, error } = await supabase
       .from('posts')
-      .update({ body_text: bodyText, status: 'scored', match_score: null, score_detail_json: null })
+      .update(buildBodyPatch((current as { body_text: string | null }).body_text, bodyText))
       .eq('id', id)
       .select('body_text, status')
       .single()

@@ -4,8 +4,8 @@ import { createServerClient } from '@/lib/supabase'
 import { askClaude } from '@/lib/claude'
 import { buildPlaceContext, searchPlace } from '@/lib/naver-search'
 import type { PlaceSearchResult } from '@/lib/naver-search'
-import { HOOK_RULES, ANTI_AI_TONE, CURATION_COPY, COUPANG_REVIEW_COPY, COMMERCE_PACK_RULES } from '@/lib/prompt-rules'
-import { buildMockCommercePackBody } from '@/lib/commerce-pack'
+import { ANTI_AI_TONE, COUPANG_REVIEW_COPY, COMMERCE_PACK_RULES } from '@/lib/prompt-rules'
+import { buildMockCommercePackBody, replaceCommerceSection, splitCommerceSections } from '@/lib/commerce-pack'
 import { getLocalPost, updateLocalPost } from '@/lib/local-posts'
 import { getLocalVoiceProfile } from '@/lib/local-voice-profiles'
 import { listLocalPostImages } from '@/lib/local-post-images'
@@ -84,7 +84,23 @@ const STYLE_TRANSFER_RULES = `
 - 원문 프로필이 ㅋㅋㅋㅋ, ㅎㅎ, !!, ??를 쓰면 최소 1개는 실제 말투처럼 살린다.
 - 시그니처 표현은 1~3개만 자연스럽게 섞는다. 과하면 AI티로 본다.
 - 정형 소제목, "---" 구분선, 요약형 마무리, 지나치게 깔끔한 정보문 톤은 제거한다.
+- "이런 분께 추천", "가격 확인하기", "보러 가기" 같은 정형 광고 문구를 새로 만들지 않는다.
+- 정보 설명 문장이 3문단 이상 연속되지 않게, 중간에 짧은 감정 문장이나 혼잣말 문장을 섞는다.
 - 초안에 없는 새로운 사실, 가격, 메뉴, 효능, 방문 경험은 추가하지 않는다.
+------------------------------------------`
+
+const PRODUCT_FACT_DRAFT_RULES = `
+
+--- 상품 정보 초안 규칙 ---
+이 단계는 판매 카피가 아니라 개인 블로그에 넣을 상품 정보 초안이다.
+- commerce_pack에서는 ## 블로그 글 섹션에만 이 규칙을 엄격 적용하고, 쇼츠/CTA/고지 섹션은 각 섹션 규칙을 따른다.
+- 말투 지문이 카피 규칙보다 우선이다. 충돌하면 말투 지문을 따른다.
+- "이런 분께 추천", "가격 확인하기", "보러 가기", "한 번 확인해보세요" 같은 정형 CTA 금지.
+- 불편을 과하게 부풀려 문제 제기하지 말고, 상품 정보에서 확인되는 특징만 담백하게 정리한다.
+- 직접 사용하지 않은 상품은 효과 확정·해결 확정·사용 후기처럼 쓰지 않는다.
+- "정보를 찾아보니", "스펙을 보면", "상세 정보 기준" 같은 간접 출처 표현은 글 전체 1~2회만 쓴다.
+- 나머지는 "내 책상에 두면", "이런 부분은 괜찮아 보였고", "이 점이 눈에 들어왔어요"처럼 관찰+생각 톤으로 푼다.
+- 링크가 필요하면 마지막에 상품명 링크 한 줄만 둔다. 구매를 재촉하지 않는다.
 ------------------------------------------`
 
 const ANTI_HALLUCINATION = `
@@ -134,17 +150,34 @@ function buildSystemPrompt(postType: PostType, reusableSystemPrompt: string, voi
   if (postType === 'daily' || postType === 'review') {
     return voiceBase + VOICE_FIRST_BLOG_RULES + ANTI_AI_TONE
   }
-  return voiceBase + BLOG_FORMAT_RULES + HOOK_RULES + ANTI_AI_TONE
-    + (postType === 'product' || postType === 'commerce_pack' ? CURATION_COPY : '')
-    + (postType === 'commerce_pack' ? COMMERCE_PACK_RULES : '')
+  if (postType === 'product') {
+    return voiceBase + BLOG_FORMAT_RULES + PRODUCT_FACT_DRAFT_RULES + ANTI_AI_TONE
+  }
+  if (postType === 'commerce_pack') {
+    return voiceBase + BLOG_FORMAT_RULES + PRODUCT_FACT_DRAFT_RULES + ANTI_AI_TONE + COMMERCE_PACK_RULES
+  }
+  return voiceBase + BLOG_FORMAT_RULES + ANTI_AI_TONE
 }
 
-function shouldRunStyleTransfer(postType: PostType): boolean {
-  return postType === 'daily' || postType === 'review'
+function buildStyleTransferSystemPrompt(
+  postType: PostType,
+  reusableSystemPrompt: string,
+  voiceFingerprint: string,
+  voiceExemplars = '',
+): string {
+  const voiceBase = reusableSystemPrompt + voiceFingerprint + voiceExemplars
+  const voiceFirst = postType === 'daily' || postType === 'review' ? VOICE_FIRST_BLOG_RULES : BLOG_FORMAT_RULES + PRODUCT_FACT_DRAFT_RULES
+  return voiceBase + voiceFirst + STYLE_TRANSFER_RULES + ANTI_AI_TONE
 }
 
-function buildStyleTransferPrompt(draft: string): string {
+function shouldRunFullStyleTransfer(postType: PostType): boolean {
+  return postType === 'daily' || postType === 'review' || postType === 'product'
+}
+
+function buildStyleTransferPrompt(draft: string, usageBasis?: UsageBasis): string {
   return `아래 초안을 사실은 유지하고 말투만 다시 입혀라.
+
+${usageBasis ? usageBasisInstruction(usageBasis) : ''}
 
 ## 초안
 ${draft}
@@ -152,8 +185,33 @@ ${draft}
 ## 출력
 - 마크다운 본문만 출력
 - 설명/분석/수정 내역 쓰지 말 것
-- # 제목은 유지하거나 더 자연스럽게 바꿔도 됨
+- # 제목 1개를 반드시 포함. 제목 없이 본문으로 바로 시작하지 말 것
 - 본문은 원문 샘플의 줄넘김·붙여쓰기·이모티콘·ㅋㅋ/ㅎㅎ·문장부호 습관을 최대한 복제`
+}
+
+async function applyStyleTransfer(
+  rawText: string,
+  postType: PostType,
+  styleTransferSystemPrompt: string,
+  usageBasis?: UsageBasis,
+): Promise<string> {
+  if (shouldRunFullStyleTransfer(postType)) {
+    return askClaude({
+      system: styleTransferSystemPrompt,
+      user: buildStyleTransferPrompt(rawText, usageBasis),
+    })
+  }
+
+  if (postType !== 'commerce_pack') return rawText
+
+  const blogDraft = splitCommerceSections(rawText)['블로그 글']
+  if (!blogDraft) return rawText
+
+  const styledBlog = await askClaude({
+    system: styleTransferSystemPrompt,
+    user: buildStyleTransferPrompt(blogDraft, usageBasis),
+  })
+  return replaceCommerceSection(rawText, '블로그 글', styledBlog)
 }
 
 function buildDailyPrompt(dailyContent: string, images: PostImage[]): string {
@@ -220,7 +278,8 @@ ${usageBasisInstruction(usageBasis)}
 ## 요구사항
 - 마크다운 형식, 최소 800자
 - 상품 특징과 장점을 독자 시점에서 자연스럽게 녹여낼 것
-- 마지막 단락에 구매 유도 문구 포함`
+- 광고문처럼 보이는 정형 소제목, 추천 리스트, 구매 재촉 문구 금지
+- 마지막에는 상품 링크를 담백하게 한 줄만 둘 것`
 }
 
 // 직접 사용 여부에 따라 1인칭 후기 표현 허용/차단을 명시 — 안 써본 상품을 "직접 써보니"로 포장하는 것 방지.
@@ -233,7 +292,9 @@ function usageBasisInstruction(usageBasis: UsageBasis): string {
   return `## 사용 여부
 작성자가 이 상품을 직접 사용해보지 않았다 (정보성 큐레이션).
 "직접 써보니", "써본 결과", "써봤는데" 같은 1인칭 사용 후기 표현을 절대 쓰지 말 것.
-대신 "정보를 찾아보니", "스펙을 보면", "이런 분들께 추천" 같은 정보 제공자 시점으로 쓸 것.`
+대신 "정보를 찾아보니", "스펙을 보면", "상세 정보를 기준으로 보면" 같은 정보 제공자 시점으로 쓸 것.
+단 "이런 분들께 추천" 같은 정형 광고 섹션은 만들지 말 것.
+간접 출처 표현은 반복하지 말고, 관찰한 정보에 대한 내 생각을 자연스럽게 섞을 것.`
 }
 
 // 커머스 콘텐츠 패키지 — 상품 정보 1회 입력으로 블로그+쇼츠+제작지시+캡션+CTA+고지+가설+체크리스트까지 한 번에.
@@ -407,16 +468,14 @@ export async function POST(
       const voiceFingerprint = buildVoiceFingerprintRules(localProfile.profile_json)
       const voiceExemplars = buildVoiceExemplarRules(localProfile.source_text, localProfile.profile_json, { postType })
       const systemPrompt = buildSystemPrompt(postType, localProfile.reusable_system_prompt, voiceFingerprint, voiceExemplars)
+      const styleTransferSystemPrompt = buildStyleTransferSystemPrompt(postType, localProfile.reusable_system_prompt, voiceFingerprint, voiceExemplars)
 
       let rawText = mockRawText ?? await askClaude({
         system: systemPrompt,
         user: userPrompt,
       })
-      if (!mockRawText && shouldRunStyleTransfer(postType)) {
-        rawText = await askClaude({
-          system: systemPrompt + STYLE_TRANSFER_RULES,
-          user: buildStyleTransferPrompt(rawText),
-        })
+      if (!mockRawText) {
+        rawText = await applyStyleTransfer(rawText, postType, styleTransferSystemPrompt, localPost.content_json?.usage_basis)
       }
       if (postType !== 'commerce_pack') rawText = stripMarkdownHorizontalRules(rawText)
       let body_text = postType === 'coupang' ? rawText : resolveImageSlots(rawText, localImages)
@@ -523,15 +582,13 @@ export async function POST(
     const voiceFingerprint = buildVoiceFingerprintRules(profileJson)
     const voiceExemplars = buildVoiceExemplarRules(row.voice_profiles.source_text, profileJson, { postType })
     const systemPrompt = buildSystemPrompt(postType, row.voice_profiles.reusable_system_prompt, voiceFingerprint, voiceExemplars)
+    const styleTransferSystemPrompt = buildStyleTransferSystemPrompt(postType, row.voice_profiles.reusable_system_prompt, voiceFingerprint, voiceExemplars)
     let rawText = mockRawText ?? await askClaude({
       system: systemPrompt,
       user: userPrompt,
     })
-    if (!mockRawText && shouldRunStyleTransfer(postType)) {
-      rawText = await askClaude({
-        system: systemPrompt + STYLE_TRANSFER_RULES,
-        user: buildStyleTransferPrompt(rawText),
-      })
+    if (!mockRawText) {
+      rawText = await applyStyleTransfer(rawText, postType, styleTransferSystemPrompt, row.content_json?.usage_basis)
     }
     if (postType !== 'commerce_pack') rawText = stripMarkdownHorizontalRules(rawText)
     // AI가 삽입한 <사진N_타입> 슬롯 → ![image-N] 변환

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { askClaude } from '@/lib/claude'
-import { HOOK_RULES, ANTI_AI_TONE, CURATION_COPY, COUPANG_REVIEW_COPY, COMMERCE_PACK_RULES } from '@/lib/prompt-rules'
+import { ANTI_AI_TONE, COUPANG_REVIEW_COPY, COMMERCE_PACK_RULES } from '@/lib/prompt-rules'
 import { buildVoiceFingerprintRules } from '@/lib/voice-fingerprint'
 import { buildVoiceExemplarRules } from '@/lib/voice-exemplars'
 import { getLocalPost, updateLocalPost } from '@/lib/local-posts'
@@ -49,7 +49,20 @@ const STYLE_TRANSFER_RULES = `
 - 원문 프로필이 이모티콘을 쓰면 글 전체에 1개는 자연스럽게 넣는다. 단 문단마다 넣지 않는다.
 - 원문 프로필이 ㅋㅋㅋㅋ, ㅎㅎ, !!, ??를 쓰면 최소 1개는 실제 말투처럼 살린다.
 - 정형 소제목, "---" 구분선, 요약형 마무리, 지나치게 깔끔한 정보문 톤은 제거한다.
+- "이런 분께 추천", "가격 확인하기", "보러 가기" 같은 정형 광고 문구를 새로 만들지 않는다.
+- 정보 설명 문장이 3문단 이상 연속되지 않게, 중간에 짧은 감정 문장이나 혼잣말 문장을 섞는다.
 - 초안에 없는 새로운 사실, 가격, 메뉴, 효능, 방문 경험은 추가하지 않는다.
+------------------------------------------`
+
+const PRODUCT_REGENERATION_RULES = `
+
+--- 상품글 재생성 규칙 ---
+말투 지문이 카피 규칙보다 우선이다. 충돌하면 말투 지문을 따른다.
+- 광고 카피처럼 더 세게 팔려고 하지 말고, 기존 사실을 내 블로그 말투로 바꾼다.
+- 정형 추천 리스트, 가격확인 CTA, 불편 과장, 효과 확정 표현을 줄인다.
+- 직접 사용하지 않은 상품은 사용 후기처럼 쓰지 않는다.
+- "정보를 찾아보니", "스펙을 보면", "상세 정보 기준" 같은 간접 출처 표현은 글 전체 1~2회만 쓴다.
+- 제목 없이 본문으로 바로 시작하지 말고 # 제목 1개를 유지한다.
 ------------------------------------------`
 
 function buildSystemPrompt(postType: string | null, reusableSystemPrompt: string, voiceFingerprint: string, voiceExemplars = ''): string {
@@ -60,15 +73,20 @@ function buildSystemPrompt(postType: string | null, reusableSystemPrompt: string
   if (postType === 'daily' || postType === 'review') {
     return voiceBase + VOICE_FIRST_BLOG_RULES + STYLE_TRANSFER_RULES + ANTI_AI_TONE
   }
-  return voiceBase + BLOG_FORMAT_RULES + HOOK_RULES + ANTI_AI_TONE
-    + (postType === 'product' || postType === 'commerce_pack' ? CURATION_COPY : '')
-    + (postType === 'commerce_pack' ? COMMERCE_PACK_RULES : '')
+  if (postType === 'product') {
+    return voiceBase + BLOG_FORMAT_RULES + STYLE_TRANSFER_RULES + PRODUCT_REGENERATION_RULES + ANTI_AI_TONE
+  }
+  if (postType === 'commerce_pack') {
+    return voiceBase + BLOG_FORMAT_RULES + STYLE_TRANSFER_RULES + PRODUCT_REGENERATION_RULES + ANTI_AI_TONE + COMMERCE_PACK_RULES
+  }
+  return voiceBase + BLOG_FORMAT_RULES + ANTI_AI_TONE
 }
 
 function buildRegeneratePrompt(
   prevBody: string,
   scoreDetail: ScoreDetail,
   feedback: string,
+  postType?: string | null,
 ): string {
   const highlightLines = scoreDetail.highlights
     .map(
@@ -89,6 +107,10 @@ ${scoreDetail.diagnosis}
 ${highlightLines || '(없음)'}
 
 ${feedback ? `## 추가 피드백\n${feedback}\n` : ''}
+${postType === 'commerce_pack' ? `## commerce_pack 구조 보존
+- 기존 9개 섹션 제목과 순서를 반드시 유지한다.
+- 특히 ## 블로그 글 섹션은 말투를 가장 강하게 바꾸되, 쇼츠/고지/가설/체크리스트 섹션은 구조가 깨지지 않게 최소 수정한다.
+` : ''}
 위 피드백을 모두 반영해 블로그 본문 전체를 새로 작성하세요. 마크다운 형식을 유지하세요.`
 }
 
@@ -122,7 +144,7 @@ export async function POST(
         ? `${post.body_text}\n\n[mock 재생성 — 실제 API 호출 안 함. feedback: "${feedback || '(없음)'}"]`
         : await askClaude({
           system: buildSystemPrompt(post.post_type, profile.reusable_system_prompt, voiceFingerprint, voiceExemplars),
-          user: buildRegeneratePrompt(post.body_text, scoreDetail, feedback ?? ''),
+          user: buildRegeneratePrompt(post.body_text, scoreDetail, feedback ?? '', post.post_type),
         })
       if (post.post_type !== 'commerce_pack') body_text = stripMarkdownHorizontalRules(body_text)
 
@@ -170,7 +192,7 @@ export async function POST(
       ? `${row.body_text}\n\n[mock 재생성 — 실제 API 호출 안 함. feedback: "${feedback || '(없음)'}"]`
       : await askClaude({
         system: buildSystemPrompt(row.post_type, row.voice_profiles.reusable_system_prompt, voiceFingerprint, voiceExemplars),
-        user: buildRegeneratePrompt(row.body_text, scoreDetail, feedback ?? ''),
+        user: buildRegeneratePrompt(row.body_text, scoreDetail, feedback ?? '', row.post_type),
       })
     if (row.post_type !== 'commerce_pack') body_text = stripMarkdownHorizontalRules(body_text)
 

@@ -29,7 +29,7 @@ type LoadingStep = 'idle' | 'creating' | 'uploading' | 'sourcing' | 'generating'
 
 const VOICE_SCORE_PASS = 75
 const VOICE_SCORE_TARGET = 85
-const AUTO_POLISH_POST_TYPES = new Set<PostType>(['daily', 'review'])
+const AUTO_POLISH_POST_TYPES = new Set<PostType>(['daily', 'review', 'product'])
 
 const STEP_LABELS: Record<LoadingStep, string> = {
   idle: '',
