@@ -1,12 +1,19 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import {
+  deleteLocalVoiceProfile,
+  getLocalVoiceProfile,
+  updateLocalVoiceProfileName,
+} from '@/lib/local-voice-profiles'
 import type { VoiceProfile } from '@/types'
 
 export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/voice-profiles/[id]'>) {
+  let requestedName = ''
   try {
     const { id } = await ctx.params
     const { name } = await req.json() as { name?: string }
+    requestedName = name?.trim() ?? ''
     if (!name?.trim()) return NextResponse.json({ error: '이름을 입력해주세요.' }, { status: 400 })
     const supabase = createServerClient()
     const { data, error } = await supabase
@@ -18,7 +25,12 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/voice-prof
     if (error) throw new Error(error.message)
     return NextResponse.json(data)
   } catch (err) {
-    const message = err instanceof Error ? err.message : '알 수 없는 오류가 발생했습니다.'
+    const message = err instanceof Error ? err.message : String(err)
+    if (message.includes('fetch failed')) {
+      const { id } = await ctx.params
+      const data = await updateLocalVoiceProfileName(id, requestedName)
+      if (data) return NextResponse.json(data)
+    }
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
@@ -31,7 +43,12 @@ export async function DELETE(_req: NextRequest, ctx: RouteContext<'/api/voice-pr
     if (error) throw new Error(error.message)
     return NextResponse.json({ success: true })
   } catch (err) {
-    const message = err instanceof Error ? err.message : '알 수 없는 오류가 발생했습니다.'
+    const message = err instanceof Error ? err.message : String(err)
+    if (message.includes('fetch failed')) {
+      const { id } = await ctx.params
+      await deleteLocalVoiceProfile(id)
+      return NextResponse.json({ success: true })
+    }
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
@@ -57,7 +74,13 @@ export async function GET(_req: NextRequest, ctx: RouteContext<'/api/voice-profi
 
     return NextResponse.json(data as unknown as VoiceProfile)
   } catch (err) {
-    const message = err instanceof Error ? err.message : '알 수 없는 오류가 발생했습니다.'
+    const message = err instanceof Error ? err.message : String(err)
+    if (message.includes('fetch failed')) {
+      const { id } = await ctx.params
+      const local = await getLocalVoiceProfile(id)
+      if (local) return NextResponse.json(local)
+      return NextResponse.json({ error: 'profile not found' }, { status: 404 })
+    }
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

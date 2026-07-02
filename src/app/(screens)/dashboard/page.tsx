@@ -1,12 +1,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import type { Post, PostType } from '@/types'
+import type { Post } from '@/types'
 
 const POST_TYPE_LABEL: Record<string, string> = {
-  product: '🛍️ 상품 리뷰',
-  daily:   '☀️ 일상 기록',
-  review:  '⭐ 경험 리뷰',
+  product:        '🛍️ 상품 리뷰',
+  daily:          '☀️ 일상 기록',
+  review:         '⭐ 경험 리뷰',
+  coupang:        '📦 쿠팡 상품평',
+  commerce_pack:  '🧪 커머스 패키지',
 }
 
 const PLATFORM_LABEL: Record<string, string> = {

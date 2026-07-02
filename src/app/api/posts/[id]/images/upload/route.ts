@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { saveLocalUploadedImage } from '@/lib/local-post-images'
 
 export async function POST(
   req: NextRequest,
@@ -11,6 +12,15 @@ export async function POST(
     const file = formData.get('file') as File | null
 
     if (!file) return NextResponse.json({ error: '파일이 없습니다.' }, { status: 400 })
+
+    if (id.startsWith('local_post_')) {
+      const row = await saveLocalUploadedImage(id, file)
+      return NextResponse.json({
+        id: row.id,
+        public_url: row.public_url,
+        storage_path: row.storage_path,
+      }, { status: 201 })
+    }
 
     const ext = file.name.split('.').pop() ?? 'bin'
     const storagePath = `${id}/${Date.now()}.${ext}`

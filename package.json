@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:commerce": "tsx scripts/test-commerce-pack.ts",
+    "test:image": "tsx scripts/test-image-placement.ts",
+    "test:shorts": "tsx scripts/test-shorts-render-plan.ts",
+    "test:voice": "tsx scripts/test-voice-profile.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.98.0",
@@ -26,6 +30,7 @@
     "eslint-config-next": "16.2.6",
     "playwright": "^1.60.0",
     "tailwindcss": "^4",
+    "tsx": "^4.22.4",
     "typescript": "^5"
   }
 }

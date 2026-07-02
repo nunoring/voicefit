@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { askClaudeVision } from '@/lib/claude'
 import type { ImageMediaType } from '@/lib/claude'
+import { getLocalPost } from '@/lib/local-posts'
+import { getLocalVoiceProfile } from '@/lib/local-voice-profiles'
+import { getLocalPostImage, readLocalUploadedImage, updateLocalPostImage } from '@/lib/local-post-images'
 
 interface InterpretResult {
   vision_interpretation: string
@@ -34,6 +37,12 @@ function mediaTypeFromPath(path: string): ImageMediaType {
   return map[ext ?? ''] ?? 'image/jpeg'
 }
 
+function parseVisionResult(result: string): InterpretResult {
+  return JSON.parse(
+    result.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim(),
+  ) as InterpretResult
+}
+
 export async function POST(
   req: NextRequest,
   ctx: RouteContext<'/api/posts/[id]/images/interpret'>,
@@ -43,6 +52,49 @@ export async function POST(
     const { image_id } = (await req.json()) as { image_id?: string }
 
     if (!image_id) return NextResponse.json({ error: 'image_id는 필수입니다.' }, { status: 400 })
+
+    if (id.startsWith('local_post_')) {
+      const img = await getLocalPostImage(id, image_id)
+      if (!img) return NextResponse.json({ error: '이미지를 찾을 수 없습니다.' }, { status: 404 })
+
+      const post = await getLocalPost(id)
+      const profile = post?.voice_profile_id
+        ? await getLocalVoiceProfile(post.voice_profile_id)
+        : null
+      const voicePrompt = profile?.reusable_system_prompt ?? ''
+
+      const buffer = await readLocalUploadedImage(id, img)
+      const imageBase64 = buffer.toString('base64')
+      const mediaType = mediaTypeFromPath(img.storage_path)
+
+      const system = [
+        voicePrompt ? `[블로거 말투 가이드]\n${voicePrompt}\n\n` : '',
+        VISION_SYSTEM_BASE,
+        '\n\n반드시 유효한 JSON만 출력. 마크다운 코드펜스·설명 금지.',
+      ].join('')
+
+      const result = await askClaudeVision({
+        system,
+        user: '이 이미지를 분석해 JSON으로 반환하라.',
+        imageBase64,
+        mediaType,
+      })
+
+      let parsed: InterpretResult
+      try {
+        parsed = parseVisionResult(result)
+      } catch {
+        throw new Error(`Vision 모델 응답 파싱 실패: ${result.slice(0, 200)}`)
+      }
+
+      await updateLocalPostImage(image_id, {
+        vision_interpretation: parsed.vision_interpretation,
+        placement_index: parsed.placement_index,
+        generated_paragraph: parsed.generated_paragraph,
+      })
+
+      return NextResponse.json(parsed)
+    }
 
     const supabase = createServerClient()
 
@@ -86,9 +138,7 @@ export async function POST(
     // Vision 엔드포인트는 askClaudeVision(텍스트 반환)이므로 수동 파싱
     let parsed: InterpretResult
     try {
-      parsed = JSON.parse(
-        result.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim(),
-      )
+      parsed = parseVisionResult(result)
     } catch {
       throw new Error(`Vision 모델 응답 파싱 실패: ${result.slice(0, 200)}`)
     }

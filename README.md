@@ -32,10 +32,30 @@ http://localhost:3000 에서 세 화면(A: 말투 분석 → B: 글 생성 → C
 | `OPENAI_API_KEY` | OpenAI API 키 |
 | `COUPANG_ACCESS_KEY` / `COUPANG_SECRET_KEY` | 쿠팡 파트너스 API 키 (선택) |
 | `UNSPLASH_ACCESS_KEY` | Unsplash API 키 (선택) |
+| `COMMERCE_PACK_MOCK` | `1`이면 커머스 패키지 생성/재생성/채점이 실 Claude API 없이 deterministic 더미로 동작 (아래 참고) |
 
 ## DB 마이그레이션
 
-Supabase 대시보드 SQL Editor에서 `supabase/migrations/0001_init.sql` 실행.
+Supabase 대시보드 SQL Editor에서 `supabase/migrations/0001_init.sql` → `0002_commerce_pack_and_missing_columns.sql` 순서로 실행.
+
+---
+
+## 커머스 패키지 — Mock 생성 모드
+
+`/generate`의 "커머스 패키지" 모드는 실제 Claude API 호출 없이도 UI·정책 감사·섹션 복사 흐름을 테스트할 수 있다.
+
+```
+# .env.local에 추가
+COMMERCE_PACK_MOCK=1
+```
+
+이 상태에서 커머스 패키지를 생성/재생성/채점하면:
+- 생성: 입력한 상품명·가격을 그대로 끼워 넣은 8섹션 더미 마크다운을 즉시 반환 (API 비용 0원)
+- 재생성: 이전 본문 끝에 `[mock 재생성 ...]` 마커만 덧붙임
+- 채점: 항상 `match_score: 80` 고정값 반환
+
+product/daily/review/coupang 등 다른 글 유형에는 영향 없음 — 이 플래그는 commerce_pack에만 적용된다.
+실제 생성을 테스트하려면 `.env.local`에서 `COMMERCE_PACK_MOCK` 줄을 지우거나 `0`으로 바꾸면 된다.
 
 ---
 

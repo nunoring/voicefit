@@ -2,7 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import type { PostType, ProductItem, ScoreApiResult, Highlight } from '@/types'
+import type { PostType, ProductItem, ScoreApiResult, Highlight, UsageBasis } from '@/types'
+import { COMMERCE_SECTION_HEADERS, splitCommerceSections, type CommerceSectionHeader } from '@/lib/commerce-pack'
 
 // ── 타입 ─────────────────────────────────────────────────────────────────────
 
@@ -18,7 +19,11 @@ interface ReviewContent {
   experience: string
 }
 
-type LoadingStep = 'idle' | 'creating' | 'uploading' | 'sourcing' | 'generating' | 'scoring' | 'regenerating'
+type LoadingStep = 'idle' | 'creating' | 'uploading' | 'sourcing' | 'generating' | 'scoring' | 'polishing' | 'regenerating' | 'saving'
+
+const VOICE_SCORE_PASS = 75
+const VOICE_SCORE_TARGET = 85
+const AUTO_POLISH_POST_TYPES = new Set<PostType>(['daily', 'review'])
 
 const STEP_LABELS: Record<LoadingStep, string> = {
   idle: '',
@@ -27,19 +32,28 @@ const STEP_LABELS: Record<LoadingStep, string> = {
   sourcing: '이미지 소싱 중…',
   generating: '본문 생성 중…',
   scoring: '말투 일치도 채점 중…',
+  polishing: '말투 자동 보정 중…',
   regenerating: '재생성 중…',
+  saving: '수정본 저장 중…',
 }
 
 const POST_TYPES: { type: PostType; icon: string; label: string; desc: string }[] = [
-  { type: 'product', icon: '🛍️', label: '상품 리뷰', desc: '쿠팡, 오늘의집, 올리브영 등' },
-  { type: 'daily',   icon: '☀️', label: '일상 기록', desc: '오늘 있었던 일, 생각' },
-  { type: 'review',  icon: '⭐', label: '경험 리뷰', desc: '카페, 맛집, 장소 후기' },
-  { type: 'coupang', icon: '📦', label: '쿠팡 상품평', desc: '체험단·구매평 (앱에 붙여넣기)' },
+  { type: 'product',       icon: '🛍️', label: '상품 리뷰',   desc: '쿠팡, 오늘의집, 올리브영 등' },
+  { type: 'daily',         icon: '☀️', label: '일상 기록',   desc: '오늘 있었던 일, 생각' },
+  { type: 'review',        icon: '⭐', label: '경험 리뷰',   desc: '카페, 맛집, 장소 후기' },
+  { type: 'coupang',       icon: '📦', label: '쿠팡 상품평', desc: '체험단·구매평 (앱에 붙여넣기)' },
+  { type: 'commerce_pack', icon: '🧪', label: '커머스 패키지', desc: '블로그+쇼츠+캡션+CTA 한 번에' },
 ]
 
 function emptyItem(): ManualItem {
   return { name: '', price: '', url: '', image_url: '' }
 }
+
+const USAGE_BASIS_OPTIONS: { value: UsageBasis; label: string }[] = [
+  { value: 'used',      label: '직접 사용함' },
+  { value: 'not_used',  label: '사용 안 함' },
+  { value: 'curation',  label: '정보성 큐레이션' },
+]
 
 // ── 하위 컴포넌트 ────────────────────────────────────────────────────────────
 
@@ -70,6 +84,21 @@ function ScoreBadge({ score }: { score: number }) {
   )
 }
 
+function buildAutoPolishFeedback(score: ScoreApiResult): string {
+  const highlights = (score.highlights ?? [])
+    .map((h) => `- ${h.issue_type}: "${h.text}" → ${h.suggestion}`)
+    .join('\n')
+
+  return [
+    `현재 말투 점수는 ${score.match_score}점입니다. 목표는 ${VOICE_SCORE_TARGET}점 이상입니다.`,
+    '사실은 유지하고 말투만 다시 입히세요.',
+    '문단 길이를 더 들쭉날쭉하게 만들고, 원문처럼 줄넘김·붙여쓰기·이모티콘·ㅋㅋ/ㅎㅎ·!!/?? 타이밍을 살리세요.',
+    '정형 소제목, 구분선, 요약형 마무리, 너무 깔끔한 정보문 톤은 제거하세요.',
+    score.diagnosis ? `진단: ${score.diagnosis}` : '',
+    highlights ? `수정 포인트:\n${highlights}` : '',
+  ].filter(Boolean).join('\n\n')
+}
+
 function HighlightList({ highlights }: { highlights: Highlight[] }) {
   if (!highlights.length) return null
   const typeLabel: Record<string, string> = {
@@ -84,13 +113,105 @@ function HighlightList({ highlights }: { highlights: Highlight[] }) {
               {typeLabel[h.issue_type] ?? h.issue_type}
             </span>
             <div>
-              <p className="font-medium text-gray-800">"{h.text}"</p>
+              <p className="font-medium text-gray-800">&quot;{h.text}&quot;</p>
               <p className="mt-0.5 text-gray-600">→ {h.suggestion}</p>
             </div>
           </div>
         </li>
       ))}
     </ul>
+  )
+}
+
+function SectionCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+
+  async function copy() {
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+    >
+      {copied ? '복사됨' : '복사'}
+    </button>
+  )
+}
+
+const COMMERCE_SECTION_META: Record<CommerceSectionHeader, { label: string; hint: string }> = {
+  '블로그 글': { label: '블로그', hint: '네이버/티스토리 본문에 넣을 긴 글' },
+  '쇼츠 대본': { label: '쇼츠 대본', hint: '영상 촬영 또는 TTS용 스크립트' },
+  '쇼츠 제작 지시서': { label: '쇼츠 제작', hint: '9:16 영상 편집/TTS/B-roll 작업 지시서' },
+  '쇼츠 설명란': { label: '쇼츠 설명란', hint: '유튜브 쇼츠 설명란에 붙여넣기' },
+  '릴스 캡션': { label: '릴스 캡션', hint: '인스타 릴스 본문/해시태그' },
+  '고정댓글 / CTA': { label: '댓글/CTA', hint: '고정댓글과 행동 유도 문구' },
+  '제휴 고지': { label: '제휴 고지', hint: '채널별 고지 문구' },
+  '실험 가설': { label: '실험 가설', hint: '클릭/저장/전환 실험 기준' },
+  '발행 전 체크리스트': { label: '체크리스트', hint: '발행 직전 검수 항목' },
+}
+
+function CommercePackResult({ bodyText }: { bodyText: string }) {
+  const sections = splitCommerceSections(bodyText)
+  const availableSections = COMMERCE_SECTION_HEADERS
+    .map((header) => ({ header, text: sections[header] ?? '' }))
+    .filter(({ text }) => text.trim().length > 0)
+  const [active, setActive] = useState<CommerceSectionHeader>(
+    availableSections[0]?.header ?? COMMERCE_SECTION_HEADERS[0],
+  )
+  const activeText = sections[active] ?? ''
+
+  if (!availableSections.length) return null
+
+  return (
+    <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-blue-900">커머스 패키지 결과</p>
+          <p className="text-xs text-blue-700">블로그에 전부 붙이는 글이 아니라, 채널별로 따로 쓰는 묶음입니다.</p>
+        </div>
+        <span className="shrink-0 rounded-full bg-white px-2 py-1 text-xs font-medium text-blue-700">
+          {availableSections.length}/{COMMERCE_SECTION_HEADERS.length}
+        </span>
+      </div>
+
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {availableSections.map(({ header }) => {
+          const meta = COMMERCE_SECTION_META[header]
+          return (
+            <button
+              key={header}
+              type="button"
+              onClick={() => setActive(header)}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                active === header
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-white text-gray-600 hover:bg-blue-100'
+              }`}
+            >
+              {meta.label}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="rounded-lg border border-blue-100 bg-white p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">{COMMERCE_SECTION_META[active].label}</p>
+            <p className="text-xs text-gray-500">{COMMERCE_SECTION_META[active].hint}</p>
+          </div>
+          <SectionCopyButton text={activeText} />
+        </div>
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-gray-50 p-3 text-sm leading-relaxed text-gray-800">
+          {activeText}
+        </pre>
+      </div>
+    </div>
   )
 }
 
@@ -102,6 +223,7 @@ function LeftPanel({
   dailyContent, setDailyContent,
   reviewContent, setReviewContent,
   imageFiles, setImageFiles,
+  usageBasis, setUsageBasis,
   onGenerate, loadingStep,
 }: {
   postType: PostType
@@ -114,6 +236,8 @@ function LeftPanel({
   setReviewContent: (v: ReviewContent) => void
   imageFiles: File[]
   setImageFiles: (v: File[]) => void
+  usageBasis: UsageBasis
+  setUsageBasis: (v: UsageBasis) => void
   onGenerate: () => void
   loadingStep: LoadingStep
 }) {
@@ -137,17 +261,20 @@ function LeftPanel({
         body: JSON.stringify({ source: 'auto', query_or_url: url }),
       })
       const json = await res.json()
-      if (res.status === 503 || json.fallback || !res.ok) {
+      const items: ProductItem[] = json.items ?? []
+      if (!items.length && (res.status === 503 || json.fallback || !res.ok)) {
         setFetchError('자동 가져오기 실패. 아래에 직접 입력해주세요.')
         return
       }
-      const items: ProductItem[] = json.items ?? []
       setManualItems(items.map((it) => ({
         name: it.name,
         price: String(it.price ?? ''),
         url: it.url ?? url,
         image_url: it.image_url ?? '',
       })))
+      if (json.fallback) {
+        setFetchError('상품 URL은 넣었어요. 상품명/가격은 직접 확인해서 보완해주세요.')
+      }
       setFetchUrl('')
     } catch {
       setFetchError('가져오기 실패. 직접 입력해주세요.')
@@ -192,7 +319,7 @@ function LeftPanel({
   }, [imageFiles, setImageFiles])
 
   const canGenerate = !isLoading && (() => {
-    if (postType === 'product') return manualItems.some((it) => it.name.trim())
+    if (postType === 'product' || postType === 'commerce_pack') return manualItems.some((it) => it.name.trim())
     if (postType === 'daily') return dailyContent.trim().length >= 10
     if (postType === 'review') return reviewContent.place.trim().length >= 2
     if (postType === 'coupang') return reviewContent.place.trim().length >= 2
@@ -226,7 +353,7 @@ function LeftPanel({
       </div>
 
       {/* 글 유형별 입력 */}
-      {postType === 'product' && (
+      {(postType === 'product' || postType === 'commerce_pack') && (
         <div className="space-y-3">
           {/* URL 가져오기 */}
           <div>
@@ -291,6 +418,34 @@ function LeftPanel({
               ))}
             </div>
           </div>
+
+          {postType === 'commerce_pack' && (
+            <div>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">이 상품, 직접 써봤나요?</p>
+              <div className="flex gap-2">
+                {USAGE_BASIS_OPTIONS.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setUsageBasis(value)}
+                    disabled={isLoading}
+                    className={`flex-1 rounded-lg border py-2 text-xs font-medium transition-colors ${
+                      usageBasis === value
+                        ? 'border-blue-500 bg-blue-50 text-blue-700'
+                        : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[11px] text-gray-400">
+                {usageBasis === 'used'
+                  ? '"직접 써보니" 같은 1인칭 후기 표현이 허용됩니다.'
+                  : '직접 사용 후기 표현("써보니" 등)은 자동으로 막고, 정보 제공자 톤으로 작성됩니다.'}
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -346,7 +501,7 @@ function LeftPanel({
       <div>
         <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">이미지 첨부</p>
         <p className="mb-2 text-[11px] text-gray-400">
-          {postType === 'product'
+          {postType === 'product' || postType === 'commerce_pack'
             ? '첨부하지 않으면 쿠팡 공식 이미지를 사용합니다.'
             : postType === 'coupang'
             ? '사진 최대 10장 — 많을수록 쿠팡 상품평 점수에 유리해요.'
@@ -401,9 +556,11 @@ function LeftPanel({
 // ── 오른쪽 패널 ───────────────────────────────────────────────────────────────
 
 function RightPanel({
+  postType,
   loadingStep, bodyText, setBodyText, scoreResult,
   feedback, setFeedback, onRegenerate, onMoveToReview,
 }: {
+  postType: PostType
   loadingStep: LoadingStep
   bodyText: string
   setBodyText: (v: string) => void
@@ -411,10 +568,12 @@ function RightPanel({
   feedback: string
   setFeedback: (v: string) => void
   onRegenerate: () => void
-  onMoveToReview: () => void
+  onMoveToReview: () => void | Promise<void>
 }) {
   const isLoading = loadingStep !== 'idle'
   const hasContent = bodyText.length > 0
+  const scoreBlocked = !!scoreResult && scoreResult.match_score < VOICE_SCORE_PASS
+  const scoreNeedsPolish = !!scoreResult && scoreResult.match_score >= VOICE_SCORE_PASS && scoreResult.match_score < VOICE_SCORE_TARGET
 
   if (!hasContent && !isLoading) {
     return (
@@ -431,9 +590,16 @@ function RightPanel({
         <>
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">생성된 본문</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                {postType === 'commerce_pack' ? '원본 markdown' : '생성된 본문'}
+              </p>
               <span className="text-xs text-gray-400">{bodyText.length}자</span>
             </div>
+            {postType === 'commerce_pack' && (
+              <div className="mb-3">
+                <CommercePackResult bodyText={bodyText} />
+              </div>
+            )}
             <textarea
               value={bodyText}
               onChange={(e) => setBodyText(e.target.value)}
@@ -447,6 +613,16 @@ function RightPanel({
               <div className="flex items-center gap-3">
                 <ScoreBadge score={scoreResult.match_score} />
               </div>
+              {scoreBlocked && (
+                <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  말투 점수가 {VOICE_SCORE_PASS}점 미만입니다. AI티가 날 가능성이 있어 재생성 후 검수로 넘기세요.
+                </p>
+              )}
+              {scoreNeedsPolish && (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  발행 후보는 맞지만 목표 점수 {VOICE_SCORE_TARGET}점에는 못 미칩니다. 한 번 더 재생성하거나 직접 문단 리듬을 다듬는 것을 권장합니다.
+                </p>
+              )}
               {scoreResult.diagnosis && (
                 <p className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">{scoreResult.diagnosis}</p>
               )}
@@ -471,8 +647,8 @@ function RightPanel({
               <button type="button" onClick={onRegenerate} disabled={isLoading} className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
                 재생성
               </button>
-              <button type="button" onClick={onMoveToReview} disabled={isLoading} className="flex-1 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50">
-                검수로 넘기기 →
+              <button type="button" onClick={onMoveToReview} disabled={isLoading || scoreBlocked} className="flex-1 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400">
+                {scoreBlocked ? '말투 재생성 필요' : '저장 후 검수 →'}
               </button>
             </div>
           </div>
@@ -494,6 +670,7 @@ function GeneratePageInner() {
   const [dailyContent, setDailyContent] = useState('')
   const [reviewContent, setReviewContent] = useState<ReviewContent>({ place: '', experience: '' })
   const [imageFiles, setImageFiles] = useState<File[]>([])
+  const [usageBasis, setUsageBasis] = useState<UsageBasis>('curation')
 
   const [postId, setPostId] = useState<string | null>(null)
   const [bodyText, setBodyText] = useState('')
@@ -503,7 +680,7 @@ function GeneratePageInner() {
   const [feedback, setFeedback] = useState('')
 
   const buildContentPayload = useCallback(() => {
-    if (postType === 'product') {
+    if (postType === 'product' || postType === 'commerce_pack') {
       return {
         product_data: {
           source: 'manual' as const,
@@ -514,19 +691,44 @@ function GeneratePageInner() {
             image_url: it.image_url || undefined,
           })),
         },
+        ...(postType === 'commerce_pack' ? { usage_basis: usageBasis } : {}),
       }
     }
     if (postType === 'daily') return { daily_content: dailyContent }
     if (postType === 'review') return { review_place: reviewContent.place, review_experience: reviewContent.experience }
     if (postType === 'coupang') return { coupang_product: reviewContent.place, coupang_experience: reviewContent.experience }
     return {}
-  }, [postType, manualItems, dailyContent, reviewContent])
+  }, [postType, manualItems, dailyContent, reviewContent, usageBasis])
 
   async function runScoring(pid: string): Promise<ScoreApiResult | null> {
     setLoadingStep('scoring')
     const res = await fetch(`/api/posts/${pid}/score`, { method: 'POST' })
     if (!res.ok) return null
     return res.json() as Promise<ScoreApiResult>
+  }
+
+  async function regeneratePost(pid: string, feedbackText: string): Promise<string> {
+    const res = await fetch(`/api/posts/${pid}/regenerate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedback: feedbackText }),
+    })
+    if (!res.ok) throw new Error((await res.json()).error)
+    const { body_text } = await res.json()
+    return body_text
+  }
+
+  async function autoPolishIfNeeded(pid: string, score: ScoreApiResult | null): Promise<ScoreApiResult | null> {
+    if (!score) return null
+    if (!AUTO_POLISH_POST_TYPES.has(postType)) return score
+    if (score.match_score >= VOICE_SCORE_TARGET) return score
+
+    setLoadingStep('polishing')
+    const polishedText = await regeneratePost(pid, buildAutoPolishFeedback(score))
+    setBodyText(polishedText)
+
+    const polishedScore = await runScoring(pid)
+    return polishedScore ?? score
   }
 
   async function handleGenerate() {
@@ -560,7 +762,7 @@ function GeneratePageInner() {
             body: JSON.stringify({ image_id: imageId }),
           })
         }
-      } else if (postType === 'product') {
+      } else if (postType === 'product' || postType === 'commerce_pack') {
         setLoadingStep('sourcing')
         const context = manualItems.map((it) => it.name.trim()).filter(Boolean).join(' ')
         const sourceRes = await fetch(`/api/posts/${id}/images/source`, {
@@ -581,7 +783,8 @@ function GeneratePageInner() {
       setBodyText(body_text)
 
       const score = await runScoring(id)
-      if (score) setScoreResult(score)
+      const finalScore = await autoPolishIfNeeded(id, score)
+      if (finalScore) setScoreResult(finalScore)
     } catch (err) {
       setError(err instanceof Error ? err.message : '오류가 발생했습니다.')
     } finally {
@@ -594,19 +797,32 @@ function GeneratePageInner() {
     setError(null)
     try {
       setLoadingStep('regenerating')
-      const res = await fetch(`/api/posts/${postId}/regenerate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feedback }),
-      })
-      if (!res.ok) throw new Error((await res.json()).error)
-      const { body_text } = await res.json()
+      const body_text = await regeneratePost(postId, feedback)
       setBodyText(body_text)
       setFeedback('')
       const score = await runScoring(postId)
       if (score) setScoreResult(score)
     } catch (err) {
       setError(err instanceof Error ? err.message : '오류가 발생했습니다.')
+    } finally {
+      setLoadingStep('idle')
+    }
+  }
+
+  async function handleMoveToReview() {
+    if (!postId) return
+    setError(null)
+    try {
+      setLoadingStep('saving')
+      const res = await fetch(`/api/posts/${postId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body_text: bodyText }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error)
+      router.push(`/review?post_id=${postId}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '수정본 저장 중 오류가 발생했습니다.')
     } finally {
       setLoadingStep('idle')
     }
@@ -646,15 +862,17 @@ function GeneratePageInner() {
             dailyContent={dailyContent} setDailyContent={setDailyContent}
             reviewContent={reviewContent} setReviewContent={setReviewContent}
             imageFiles={imageFiles} setImageFiles={setImageFiles}
+            usageBasis={usageBasis} setUsageBasis={setUsageBasis}
             onGenerate={handleGenerate} loadingStep={loadingStep}
           />
         </div>
         <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
           <RightPanel
+            postType={postType}
             loadingStep={loadingStep} bodyText={bodyText} setBodyText={setBodyText}
             scoreResult={scoreResult} feedback={feedback} setFeedback={setFeedback}
             onRegenerate={handleRegenerate}
-            onMoveToReview={() => postId && router.push(`/review?post_id=${postId}`)}
+            onMoveToReview={handleMoveToReview}
           />
         </div>
       </div>

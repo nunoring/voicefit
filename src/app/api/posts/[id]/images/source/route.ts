@@ -14,6 +14,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { getLocalPost } from '@/lib/local-posts'
+import { insertLocalOfficialImages } from '@/lib/local-post-images'
 import type { ProductData } from '@/types'
 
 export async function POST(
@@ -22,9 +24,22 @@ export async function POST(
 ) {
   try {
     const { id } = await ctx.params
-    const { needed_count = 3, context = '' } = (await req.json()) as {
+    const { needed_count = 3 } = (await req.json()) as {
       needed_count?: number
       context?: string
+    }
+
+    if (id.startsWith('local_post_')) {
+      const post = await getLocalPost(id)
+      if (!post) return NextResponse.json({ error: '포스트를 찾을 수 없습니다.' }, { status: 404 })
+
+      const officialUrls = (post.product_data_json?.items ?? [])
+        .map((i) => i.image_url)
+        .filter((u): u is string => !!u)
+        .slice(0, needed_count)
+
+      const rows = await insertLocalOfficialImages(id, officialUrls)
+      return NextResponse.json({ saved: rows.length })
     }
 
     const supabase = createServerClient()

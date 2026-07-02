@@ -4,7 +4,7 @@ export type Screen = 'onboarding' | 'generate' | 'review'
 
 // ── 글 유형 ───────────────────────────────────────────────────────────────────
 
-export type PostType = 'product' | 'daily' | 'review' | 'coupang'
+export type PostType = 'product' | 'daily' | 'review' | 'coupang' | 'commerce_pack'
 
 // ── 발행 플랫폼 ───────────────────────────────────────────────────────────────
 
@@ -20,11 +20,15 @@ export interface ProfileJson {
   signature_phrases: string[]
   emoji_usage: string
   emoji_position?: string       // 문단 끝 / 강조할 때만 / 거의 안 씀
+  emoji_timing?: string         // 감탄 뒤 / 마무리 문장 / 리스트 끝 / 거의 안 씀
   photo_timing?: string         // 3~4문단마다 1장 / 소제목 직후 / 거의 없음
   paragraph_length?: string     // 짧게 끊어쓰기(2~3줄) / 보통(4~6줄) / 길게 서술형
   spacing_style?: string        // 표준 맞춤법 / 블로그식(붙여쓰기 혼용)
+  line_break_style?: string     // 문장마다 줄바꿈 / 2문장 후 빈 줄 / 사진 전후 공백 등
   heading_usage?: string        // 자주 씀(H2 중심) / 가끔 씀 / 거의 안 씀
   photo_comment_style?: string  // 사진 전후 글 흐름 패턴
+  punctuation_style?: string    // ㅋㅋ/ㅎㅎ/!/?/말줄임표/쉼표 사용 습관
+  ai_tell_risks?: string[]      // 이 사람 글에서 AI티로 보일 위험 요소
   vocabulary_notes: string
   do_list: string[]
   dont_list: string[]
@@ -56,6 +60,11 @@ export interface ProductData {
   items: ProductItem[]
 }
 
+// ── commerce_pack 전용 ───────────────────────────────────────────────────────
+
+/** 작성자가 이 상품을 직접 써봤는지 — 후기 표현(직접 써보니 등) 허용 여부를 가른다. */
+export type UsageBasis = 'used' | 'not_used' | 'curation'
+
 // ── posts ─────────────────────────────────────────────────────────────────────
 
 export type PostStatus = 'draft' | 'generating' | 'scored' | 'reviewing' | 'published'
@@ -63,7 +72,7 @@ export type PostStatus = 'draft' | 'generating' | 'scored' | 'reviewing' | 'publ
 export interface Highlight {
   text: string
   span?: [number, number]
-  issue_type: 'tone' | 'formality' | 'phrasing' | 'emoji'
+  issue_type: 'tone' | 'formality' | 'phrasing' | 'emoji' | 'layout'
   suggestion: string
 }
 

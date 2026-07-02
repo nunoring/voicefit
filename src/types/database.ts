@@ -1,4 +1,4 @@
-import type { ProfileJson, PostStatus, ScoreDetail, ReviewChecklist, ImageSourceType } from './index'
+import type { ProfileJson, PostStatus, PostType, PublishPlatform, ScoreDetail, ReviewChecklist, ImageSourceType } from './index'
 
 /**
  * Supabase 데이터베이스 타입 스켈레톤.
@@ -37,12 +37,16 @@ export interface Database {
           user_id: string | null
           voice_profile_id: string | null
           status: PostStatus
+          post_type: PostType | null
+          publish_platform: PublishPlatform | null
           product_data_json: Record<string, unknown> | null
+          content_json: Record<string, unknown> | null
           body_text: string | null
           match_score: number | null
           score_detail_json: ScoreDetail | null
           review_checklist_json: ReviewChecklist | null
           naver_post_url: string | null
+          published_url: string | null
           created_at: string
           updated_at: string
         }
@@ -51,12 +55,16 @@ export interface Database {
           user_id?: string | null
           voice_profile_id?: string | null
           status?: PostStatus
+          post_type?: PostType | null
+          publish_platform?: PublishPlatform | null
           product_data_json?: Record<string, unknown> | null
+          content_json?: Record<string, unknown> | null
           body_text?: string | null
           match_score?: number | null
           score_detail_json?: ScoreDetail | null
           review_checklist_json?: ReviewChecklist | null
           naver_post_url?: string | null
+          published_url?: string | null
           created_at?: string
           updated_at?: string
         }

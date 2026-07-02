@@ -29,12 +29,16 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.next-dev.log
 
 # env files
 .env
 .env.local
 .env.*.local
 !.env.example
+
+# VoiceFit local fallback data — API keys/test posts may be stored here
+.voicefit-local/
 
 # vercel
 .vercel

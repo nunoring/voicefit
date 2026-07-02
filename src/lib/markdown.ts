@@ -6,9 +6,26 @@ const LEGAL_DISCLOSURE_HTML =
   '이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.' +
   '</p>'
 
-/** 생성된 HTML 끝에 법적 고지문을 추가한다. */
+/** 생성된 HTML 맨 앞에 법적 고지문을 추가한다. */
 export function appendLegalDisclosure(html: string): string {
-  return html + '\n' + LEGAL_DISCLOSURE_HTML
+  return LEGAL_DISCLOSURE_HTML + '\n' + html
+}
+
+/**
+ * product/commerce_pack 글에 쿠팡 파트너스 고지를 본문 상단에 추가한다.
+ * 공정위 심사지침은 경제적 이해관계 표시를 제목 또는 첫 부분에 두도록 요구하므로,
+ * 본문 어딘가가 아니라 "초반부"에 이미 고지가 있을 때만 중복 삽입을 생략한다.
+ */
+export function appendLegalDisclosureIfNeeded(
+  html: string,
+  bodyText: string,
+  postType: string | null,
+): string {
+  const needsDisclosure = postType === 'product' || postType === 'commerce_pack'
+  if (!needsDisclosure) return html
+  const opening = bodyText.slice(0, 600)
+  if (/쿠팡\s*파트너스|제휴\s*수수료|제휴\s*링크/.test(opening)) return html
+  return appendLegalDisclosure(html)
 }
 
 function applyInline(text: string): string {

@@ -65,17 +65,26 @@ function ProfileResult({ profile, reusablePrompt, onConfirm }: {
         {toDisplay(profile.emoji_usage) && <Badge color="blue">이모지: {toDisplay(profile.emoji_usage)}</Badge>}
         {toDisplay(profile.avg_sentence_length) && <Badge color="gray">평균 문장 길이 {toDisplay(profile.avg_sentence_length)}어절</Badge>}
       </div>
-      {(profile.emoji_position || profile.photo_timing || profile.paragraph_length || profile.spacing_style || profile.heading_usage) && (
+      {(profile.emoji_position || profile.emoji_timing || profile.photo_timing || profile.paragraph_length || profile.spacing_style || profile.line_break_style || profile.heading_usage || profile.punctuation_style) && (
         <div>
           <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">글쓰기 스타일 패턴</p>
           <div className="grid grid-cols-2 gap-1.5">
             {profile.emoji_position  && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">이모지 위치 </span>{profile.emoji_position}</div>}
+            {profile.emoji_timing    && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">이모지 타이밍 </span>{profile.emoji_timing}</div>}
             {profile.photo_timing    && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">사진 타이밍 </span>{profile.photo_timing}</div>}
             {profile.paragraph_length && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">문단 길이 </span>{profile.paragraph_length}</div>}
             {profile.spacing_style   && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">띄어쓰기 </span>{profile.spacing_style}</div>}
+            {profile.line_break_style && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">줄넘김 </span>{profile.line_break_style}</div>}
             {profile.heading_usage   && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">소제목 </span>{profile.heading_usage}</div>}
+            {profile.punctuation_style && <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">문장부호 </span>{profile.punctuation_style}</div>}
             {profile.photo_comment_style && <div className="col-span-2 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"><span className="font-medium text-gray-500">사진 코멘트 스타일 </span>{profile.photo_comment_style}</div>}
           </div>
+        </div>
+      )}
+      {!!profile.ai_tell_risks?.length && (
+        <div>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">AI티 위험 요소</p>
+          <TagList items={toStringArray(profile.ai_tell_risks)} color="gray" />
         </div>
       )}
       {toDisplay(profile.vocabulary_notes) && (
@@ -249,9 +258,22 @@ function SavedProfiles({ onSelect }: { onSelect: (id: string) => void }) {
 type Status = 'idle' | 'loading' | 'done' | 'error'
 type CrawlStatus = 'idle' | 'loading' | 'success' | 'fallback'
 
+function normalizeUrlInput(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+  try {
+    const url = new URL(withProtocol)
+    return url.href
+  } catch {
+    return null
+  }
+}
+
 export default function OnboardingPage() {
   const router = useRouter()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const crawlInputRef = useRef<HTMLInputElement>(null)
 
   const [sourceText, setSourceText] = useState('')
   const [status, setStatus] = useState<Status>('idle')
@@ -260,6 +282,7 @@ export default function OnboardingPage() {
 
   const [crawlUrl, setCrawlUrl] = useState('')
   const [crawlStatus, setCrawlStatus] = useState<CrawlStatus>('idle')
+  const [crawlMessage, setCrawlMessage] = useState<string | null>(null)
   const [loadedUrls, setLoadedUrls] = useState<string[]>([])
   const [totalImages, setTotalImages] = useState(0)
   const MAX_URLS = 5
@@ -277,20 +300,27 @@ export default function OnboardingPage() {
   }
 
   async function handleCrawl() {
-    const trimmedUrl = crawlUrl.trim()
-    if (!trimmedUrl || loadedUrls.length >= MAX_URLS) return
+    const rawUrl = crawlUrl || crawlInputRef.current?.value || ''
+    const normalizedUrl = normalizeUrlInput(rawUrl)
+    if (!normalizedUrl || loadedUrls.length >= MAX_URLS) {
+      setCrawlStatus('fallback')
+      setCrawlMessage('URL 형식을 확인해 주세요. 예: https://blog.naver.com/아이디/글번호')
+      return
+    }
     setCrawlStatus('loading')
+    setCrawlMessage(null)
 
     try {
       const res = await fetch('/api/crawl', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: trimmedUrl }),
+        body: JSON.stringify({ url: normalizedUrl }),
       })
       const json = await res.json() as { text?: string; images?: string[]; fallback?: boolean }
 
       if (!res.ok || json.fallback) {
         setCrawlStatus('fallback')
+        setCrawlMessage('URL 본문 가져오기에 실패했어요. 블로그 글 본문을 복사해서 아래 입력칸에 직접 붙여넣으면 계속 진행할 수 있어요.')
         textareaRef.current?.focus()
         return
       }
@@ -303,11 +333,13 @@ export default function OnboardingPage() {
         return prev + separator + fetchedText
       })
       setTotalImages((prev) => prev + imgCount)
-      setLoadedUrls((prev) => [...prev, trimmedUrl])
+      setLoadedUrls((prev) => [...prev, normalizedUrl])
       setCrawlStatus('success')
+      setCrawlMessage(`본문 ${fetchedText.length.toLocaleString()}자와 이미지 ${imgCount}개를 가져왔어요.`)
       setCrawlUrl('')
     } catch {
       setCrawlStatus('fallback')
+      setCrawlMessage('네트워크 오류로 URL을 가져오지 못했어요. 아래 입력칸에 글 본문을 직접 붙여넣어 주세요.')
       textareaRef.current?.focus()
     }
   }
@@ -380,18 +412,20 @@ export default function OnboardingPage() {
           {loadedUrls.length < MAX_URLS && (
             <div className="flex gap-2">
               <input
+                ref={crawlInputRef}
                 type="url"
                 value={crawlUrl}
                 onChange={(e) => { setCrawlUrl(e.target.value); setCrawlStatus('idle') }}
+                onInput={(e) => { setCrawlUrl(e.currentTarget.value); setCrawlStatus('idle'); setCrawlMessage(null) }}
                 onKeyDown={(e) => e.key === 'Enter' && handleCrawl()}
                 disabled={crawlStatus === 'loading' || isAnalyzing}
-                placeholder="https://blog.naver.com/..."
+                placeholder="blog.naver.com/... 또는 https://blog.naver.com/..."
                 className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400"
               />
               <button
                 type="button"
                 onClick={handleCrawl}
-                disabled={!crawlUrl.trim() || crawlStatus === 'loading' || isAnalyzing}
+                disabled={crawlStatus === 'loading' || isAnalyzing}
                 className="rounded-lg bg-gray-700 px-4 py-2 text-sm font-medium text-white hover:bg-gray-600 disabled:bg-gray-200 disabled:text-gray-500"
               >
                 {crawlStatus === 'loading' ? '가져오는 중…' : '추가'}
@@ -430,12 +464,20 @@ export default function OnboardingPage() {
 
           {loadedUrls.length === 0 && (
             <p className="mt-2 text-[11px] text-gray-400">
-              내 블로그 글 URL을 추가하세요. 많을수록 말투 분석이 정확해요.
+              내 블로그 글 URL을 추가하세요. 안 되면 글 본문을 아래에 직접 붙여넣어도 됩니다.
             </p>
           )}
 
           {crawlStatus === 'fallback' && (
-            <p className="mt-2 text-xs text-yellow-700">! 가져오기 실패. 아래에 직접 붙여넣어 주세요.</p>
+            <p className="mt-2 rounded-lg bg-yellow-50 px-3 py-2 text-xs text-yellow-800">
+              {crawlMessage ?? 'URL 가져오기 실패. 아래에 직접 붙여넣어 주세요.'}
+            </p>
+          )}
+
+          {crawlStatus === 'success' && crawlMessage && (
+            <p className="mt-2 rounded-lg bg-green-50 px-3 py-2 text-xs text-green-700">
+              {crawlMessage}
+            </p>
           )}
 
           {loadedUrls.length >= MAX_URLS && (

@@ -56,6 +56,81 @@ async function fetchCoupangProducts(keyword: string): Promise<ProductItem[]> {
   }))
 }
 
+function normalizeUrl(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+  try {
+    return new URL(withProtocol).href
+  } catch {
+    return null
+  }
+}
+
+function extractMeta(html: string, property: string) {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const patterns = [
+    new RegExp(`<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i'),
+    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["'][^>]*>`, 'i'),
+    new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i'),
+    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${escaped}["'][^>]*>`, 'i'),
+  ]
+  for (const pattern of patterns) {
+    const match = html.match(pattern)
+    if (match?.[1]) return decodeHtml(match[1]).trim()
+  }
+  return ''
+}
+
+function decodeHtml(value: string) {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+}
+
+function cleanProductTitle(title: string) {
+  return title
+    .replace(/\s*[-|]\s*쿠팡!?$/i, '')
+    .replace(/\s*[-|]\s*Coupang!?$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+async function fetchUrlProduct(url: string): Promise<ProductItem> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      redirect: 'follow',
+    })
+    if (!res.ok) throw new Error(`Product page ${res.status}`)
+    const html = await res.text()
+    const title =
+      cleanProductTitle(extractMeta(html, 'og:title')) ||
+      cleanProductTitle(html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] ?? '')
+    const image = extractMeta(html, 'og:image')
+
+    return {
+      name: title || '상품명 입력 필요',
+      url,
+      image_url: image || undefined,
+      description: 'URL에서 자동 입력',
+    }
+  } catch {
+    return {
+      name: '상품명 입력 필요',
+      url,
+      description: 'URL만 자동 입력됨',
+    }
+  }
+}
+
 export async function POST(req: NextRequest) {
   const { source, query_or_url } = (await req.json()) as {
     source?: string
@@ -71,9 +146,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ fallback: true }, { status: 503 })
   }
 
+  const normalizedUrl = normalizeUrl(query_or_url)
+  if (normalizedUrl) {
+    const item = await fetchUrlProduct(normalizedUrl)
+    return NextResponse.json({ items: [item], fallback: item.name === '상품명 입력 필요' })
+  }
+
   const accessKey = process.env.COUPANG_ACCESS_KEY
   const secretKey = process.env.COUPANG_SECRET_KEY
-
   if (!accessKey || !secretKey) {
     return NextResponse.json({ fallback: true }, { status: 503 })
   }
