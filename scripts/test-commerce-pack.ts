@@ -199,6 +199,16 @@ test('새로 추가된 가짜 사용 표현들 → fail (not_used)', () => {
   }
 })
 
+test('사용 단어를 피한 체험담 우회 표현들 → fail (not_used)', () => {
+  const fake = ['개봉해보니', '언박싱해보니', '도착하자마자', '집에서 써', '발라보니', '입어보니', '신어보니', '먹어보니', '제 피부에']
+  for (const phrase of fake) {
+    const body = MOCK_NOT_USED + `\n${phrase} 생각보다 괜찮다는 느낌이 들었어요.`
+    const result = auditCommercePack(body, 'not_used')
+    const hasFail = result.findings.some(f => f.id === 'fake_usage_claim' && f.severity === 'fail')
+    assert(hasFail, `"${phrase}" → fake_usage_claim fail 없음`)
+  }
+})
+
 test('모든 섹션 누락 → 전체 section_missing fail', () => {
   const result = auditCommercePack('섹션 없는 본문.', null)
   const missingFails = result.findings.filter(f => f.id.startsWith('section_missing_') && f.severity === 'fail')

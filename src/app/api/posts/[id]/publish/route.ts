@@ -1,10 +1,11 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { auditCommercePack } from '@/lib/commerce-pack'
 import { markdownToHtml, buildImageUrlMap, appendLegalDisclosureIfNeeded } from '@/lib/markdown'
 import { getLocalPost, updateLocalPost } from '@/lib/local-posts'
 import { listLocalPostImages } from '@/lib/local-post-images'
-import type { Post, PublishApiResult, PublishPlatform } from '@/types'
+import type { Post, PublishApiResult, PublishPlatform, UsageBasis } from '@/types'
 
 const VOICE_SCORE_PASS = 75
 
@@ -30,6 +31,15 @@ export async function POST(
           { error: `말투 점수가 ${VOICE_SCORE_PASS}점 미만입니다. AI티 위험이 있어 재생성 또는 수정 후 다시 채점하세요.` },
           { status: 422 },
         )
+      }
+      if (post.post_type === 'commerce_pack') {
+        const audit = auditCommercePack(post.body_text, post.content_json?.usage_basis ?? null)
+        if (audit.overall === 'fail') {
+          return NextResponse.json(
+            { error: '정책 감사 fail 항목이 있어 발행할 수 없습니다.', audit },
+            { status: 422 },
+          )
+        }
       }
 
       const imageUrls = buildImageUrlMap(await listLocalPostImages(id))
@@ -57,13 +67,15 @@ export async function POST(
 
     const { data: postData, error: postErr } = await supabase
       .from('posts')
-      .select('body_text, review_checklist_json, match_score, post_type')
+      .select('body_text, review_checklist_json, match_score, post_type, content_json')
       .eq('id', id)
       .single()
 
     if (postErr) throw new Error(postErr.message)
 
-    const post = postData as unknown as Pick<Post, 'body_text' | 'review_checklist_json' | 'match_score' | 'post_type'>
+    const post = postData as unknown as Pick<Post, 'body_text' | 'review_checklist_json' | 'match_score' | 'post_type'> & {
+      content_json: { usage_basis?: UsageBasis } | null
+    }
 
     if (!post.body_text) throw new Error('발행할 본문이 없습니다.')
     if (post.match_score != null && post.match_score < VOICE_SCORE_PASS) {
@@ -71,6 +83,15 @@ export async function POST(
         { error: `말투 점수가 ${VOICE_SCORE_PASS}점 미만입니다. AI티 위험이 있어 재생성 또는 수정 후 다시 채점하세요.` },
         { status: 422 },
       )
+    }
+    if (post.post_type === 'commerce_pack') {
+      const audit = auditCommercePack(post.body_text, post.content_json?.usage_basis ?? null)
+      if (audit.overall === 'fail') {
+        return NextResponse.json(
+          { error: '정책 감사 fail 항목이 있어 발행할 수 없습니다.', audit },
+          { status: 422 },
+        )
+      }
     }
 
     // 이미지 URL 맵: placement_index 오름차순 → created_at 오름차순으로 정렬된 배열을
