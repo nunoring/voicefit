@@ -4,6 +4,12 @@ import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { PostType, ProductItem, ScoreApiResult, Highlight, UsageBasis } from '@/types'
 import { COMMERCE_SECTION_HEADERS, splitCommerceSections, type CommerceSectionHeader } from '@/lib/commerce-pack'
+import {
+  chooseVoiceProfileId,
+  readSelectedVoiceProfileId,
+  writeSelectedVoiceProfileId,
+  type VoiceProfileListItem,
+} from '@/lib/voice-profile-selection'
 
 // ── 타입 ─────────────────────────────────────────────────────────────────────
 
@@ -44,6 +50,11 @@ const POST_TYPES: { type: PostType; icon: string; label: string; desc: string }[
   { type: 'coupang',       icon: '📦', label: '쿠팡 상품평', desc: '체험단·구매평 (앱에 붙여넣기)' },
   { type: 'commerce_pack', icon: '🧪', label: '커머스 패키지', desc: '블로그+쇼츠+캡션+CTA 한 번에' },
 ]
+
+function normalizePostType(value: string | null): PostType {
+  const found = POST_TYPES.find((item) => item.type === value)
+  return found?.type ?? 'product'
+}
 
 function emptyItem(): ManualItem {
   return { name: '', price: '', url: '', image_url: '' }
@@ -663,9 +674,16 @@ function RightPanel({
 function GeneratePageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const voiceProfileId = searchParams.get('voice_profile_id')
+  const searchParamString = searchParams.toString()
+  const requestedVoiceProfileId = searchParams.get('voice_profile_id')
+  const requestedPostType = normalizePostType(searchParams.get('type'))
 
-  const [postType, setPostType] = useState<PostType>('product')
+  const [postType, setPostType] = useState<PostType>(requestedPostType)
+  const [profiles, setProfiles] = useState<VoiceProfileListItem[]>([])
+  const [profilesLoading, setProfilesLoading] = useState(true)
+  const [manualVoiceProfileId, setManualVoiceProfileId] = useState<string | null>(() => (
+    requestedVoiceProfileId ?? readSelectedVoiceProfileId()
+  ))
   const [manualItems, setManualItems] = useState<ManualItem[]>([emptyItem()])
   const [dailyContent, setDailyContent] = useState('')
   const [reviewContent, setReviewContent] = useState<ReviewContent>({ place: '', experience: '' })
@@ -678,6 +696,47 @@ function GeneratePageInner() {
   const [loadingStep, setLoadingStep] = useState<LoadingStep>('idle')
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/voice-profiles')
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return
+        setProfiles(Array.isArray(data) ? data as VoiceProfileListItem[] : [])
+        setProfilesLoading(false)
+      })
+      .catch(() => {
+        if (!cancelled) setProfilesLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const voiceProfileId = chooseVoiceProfileId(
+    profiles,
+    requestedVoiceProfileId ?? manualVoiceProfileId,
+  )
+
+  useEffect(() => {
+    if (profilesLoading) return
+    writeSelectedVoiceProfileId(voiceProfileId)
+
+    if (voiceProfileId && voiceProfileId !== requestedVoiceProfileId) {
+      const params = new URLSearchParams(searchParamString)
+      params.set('voice_profile_id', voiceProfileId)
+      router.replace(`/generate?${params.toString()}`, { scroll: false })
+    }
+  }, [profilesLoading, requestedVoiceProfileId, router, searchParamString, voiceProfileId])
+
+  function handleSelectVoiceProfile(id: string) {
+    setManualVoiceProfileId(id)
+    writeSelectedVoiceProfileId(id)
+    const params = new URLSearchParams(searchParamString)
+    params.set('voice_profile_id', id)
+    router.replace(`/generate?${params.toString()}`, { scroll: false })
+  }
 
   const buildContentPayload = useCallback(() => {
     if (postType === 'product' || postType === 'commerce_pack') {
@@ -733,7 +792,10 @@ function GeneratePageInner() {
   }
 
   async function handleGenerate() {
-    if (!voiceProfileId) return
+    if (!voiceProfileId) {
+      setError('사용할 말투를 먼저 선택해주세요.')
+      return
+    }
     setError(null)
     setBodyText('')
     setScoreResult(null)
@@ -829,6 +891,14 @@ function GeneratePageInner() {
     }
   }
 
+  if (profilesLoading && !voiceProfileId) {
+    return (
+      <div className="mx-auto max-w-2xl px-4 py-16 text-center">
+        <p className="text-sm text-gray-500">저장된 말투를 불러오는 중입니다.</p>
+      </div>
+    )
+  }
+
   if (!voiceProfileId) {
     return (
       <div className="mx-auto max-w-2xl px-4 py-16 text-center">
@@ -841,14 +911,40 @@ function GeneratePageInner() {
     )
   }
 
+  const selectedProfile = profiles.find((profile) => profile.id === voiceProfileId) ?? null
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">글 생성</h1>
           <p className="mt-1 text-sm text-gray-500">글 유형을 고르고 내용을 입력하면 내 말투로 자동 생성됩니다.</p>
         </div>
-        <a href="/dashboard" className="text-sm text-gray-400 hover:text-gray-600">내 글 목록 →</a>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          {profiles.length > 0 && (
+            <div className="min-w-64">
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">
+                사용할 말투
+              </label>
+              <select
+                value={voiceProfileId}
+                onChange={(event) => handleSelectVoiceProfile(event.target.value)}
+                disabled={loadingStep !== 'idle'}
+                className="min-h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-800 focus:border-blue-400 focus:outline-none disabled:bg-gray-50"
+              >
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name} · {new Date(profile.created_at).toLocaleDateString('ko-KR')}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-gray-400">
+                현재 선택: {selectedProfile?.name ?? '저장된 말투'}
+              </p>
+            </div>
+          )}
+          <a href="/dashboard" className="pb-2 text-sm text-gray-400 hover:text-gray-600">내 글 목록 →</a>
+        </div>
       </div>
 
       {error && (

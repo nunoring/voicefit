@@ -3,6 +3,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProfileJson, VoiceProfileCreateResponse } from '@/types'
+import {
+  readSelectedVoiceProfileId,
+  writeSelectedVoiceProfileId,
+} from '@/lib/voice-profile-selection'
 
 function toDisplay(value: unknown): string {
   if (typeof value === 'string') return value
@@ -133,7 +137,7 @@ interface SavedProfile {
   profile_json: ProfileJson
 }
 
-function SavedProfiles({ onSelect }: { onSelect: (id: string) => void }) {
+function SavedProfiles({ selectedId, onSelect }: { selectedId: string | null; onSelect: (id: string) => void }) {
   const [profiles, setProfiles] = useState<SavedProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -224,9 +228,13 @@ function SavedProfiles({ onSelect }: { onSelect: (id: string) => void }) {
                   <button
                     type="button"
                     onClick={() => onSelect(p.id)}
-                    className="w-20 rounded-lg bg-blue-600 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+                    className={`w-20 rounded-lg py-1.5 text-xs font-semibold ${
+                      selectedId === p.id
+                        ? 'bg-green-600 text-white'
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                    }`}
                   >
-                    이 말투 사용
+                    {selectedId === p.id ? '선택됨' : '이 말투 사용'}
                   </button>
                   <button
                     type="button"
@@ -279,6 +287,7 @@ export default function OnboardingPage() {
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<VoiceProfileCreateResponse | null>(null)
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(() => readSelectedVoiceProfileId())
 
   const [crawlUrl, setCrawlUrl] = useState('')
   const [crawlStatus, setCrawlStatus] = useState<CrawlStatus>('idle')
@@ -289,7 +298,13 @@ export default function OnboardingPage() {
 
   const isAnalyzing = status === 'loading'
 
+  function selectVoiceProfile(id: string) {
+    setSelectedProfileId(id)
+    writeSelectedVoiceProfileId(id)
+  }
+
   function handleSelectSaved(id: string) {
+    selectVoiceProfile(id)
     router.push(`/generate?voice_profile_id=${id}`)
   }
 
@@ -376,6 +391,7 @@ export default function OnboardingPage() {
 
   function handleConfirm() {
     if (!result) return
+    selectVoiceProfile(result.id)
     router.push(`/generate?voice_profile_id=${result.id}`)
   }
 
@@ -388,7 +404,7 @@ export default function OnboardingPage() {
 
       <div className="space-y-5">
         {/* 저장된 말투 */}
-        <SavedProfiles onSelect={handleSelectSaved} />
+        <SavedProfiles selectedId={selectedProfileId} onSelect={handleSelectSaved} />
 
         {/* 신규 등록 구분선 */}
         <div className="flex items-center gap-3">

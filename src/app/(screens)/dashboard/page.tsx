@@ -2,6 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import type { Post } from '@/types'
+import {
+  chooseVoiceProfileId,
+  readSelectedVoiceProfileId,
+  writeSelectedVoiceProfileId,
+  type VoiceProfileListItem,
+} from '@/lib/voice-profile-selection'
 
 type SystemStatus = {
   db: {
@@ -146,7 +152,8 @@ function getTitle(post: Post): string {
 export default function DashboardPage() {
   const [posts, setPosts] = useState<Post[]>([])
   const [loading, setLoading] = useState(true)
-  const [latestProfileId, setLatestProfileId] = useState<string | null>(null)
+  const [profiles, setProfiles] = useState<VoiceProfileListItem[]>([])
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null)
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
 
   useEffect(() => {
@@ -156,21 +163,30 @@ export default function DashboardPage() {
       fetch('/api/system/status').then((res) => res.json()).catch(() => null),
     ]).then(([postsData, profilesData, statusData]) => {
       setPosts(Array.isArray(postsData) ? postsData : [])
-      const profiles = Array.isArray(profilesData) ? profilesData : []
-      setLatestProfileId(profiles[0]?.id ?? null)
+      const nextProfiles = Array.isArray(profilesData) ? profilesData as VoiceProfileListItem[] : []
+      const nextProfileId = chooseVoiceProfileId(nextProfiles, readSelectedVoiceProfileId())
+      setProfiles(nextProfiles)
+      setSelectedProfileId(nextProfileId)
+      writeSelectedVoiceProfileId(nextProfileId)
       setSystemStatus(isSystemStatus(statusData) ? statusData : null)
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [])
 
-  const hasProfile = Boolean(latestProfileId)
+  function handleSelectProfile(id: string) {
+    setSelectedProfileId(id)
+    writeSelectedVoiceProfileId(id)
+  }
+
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null
+  const hasProfile = Boolean(selectedProfileId)
   const publishedCount = posts.filter((post) => post.status === 'published').length
   const scoredPosts = posts.filter((post) => post.match_score != null)
   const avgScore = scoredPosts.length
     ? Math.round(scoredPosts.reduce((sum, post) => sum + (post.match_score ?? 0), 0) / scoredPosts.length)
     : null
   const reviewReadyCount = posts.filter((post) => post.status === 'scored' || post.status === 'reviewing').length
-  const primaryHref = latestProfileId ? `/generate?voice_profile_id=${latestProfileId}` : '/onboarding'
+  const primaryHref = selectedProfileId ? `/generate?voice_profile_id=${selectedProfileId}` : '/onboarding'
 
   return (
     <div className="min-h-full bg-[#f7f8f5]">
@@ -207,6 +223,38 @@ export default function DashboardPage() {
           <SystemStatusBanner status={systemStatus} />
         </div>
 
+        {hasProfile && (
+          <section className="mb-5 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">사용할 말투</p>
+                <p className="mt-1 text-sm text-gray-700">
+                  {selectedProfile?.name ?? '저장된 말투'}로 새 글을 생성합니다.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 sm:min-w-80 sm:flex-row">
+                <select
+                  value={selectedProfileId ?? ''}
+                  onChange={(event) => handleSelectProfile(event.target.value)}
+                  className="min-h-10 flex-1 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-800 focus:border-gray-400 focus:outline-none"
+                >
+                  {profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name} · {new Date(profile.created_at).toLocaleDateString('ko-KR')}
+                    </option>
+                  ))}
+                </select>
+                <a
+                  href="/onboarding"
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  관리
+                </a>
+              </div>
+            </div>
+          </section>
+        )}
+
         {!hasProfile && !loading && (
           <section className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-5 py-4">
             <p className="text-sm font-semibold text-blue-900">먼저 네 블로그 말투를 학습해야 합니다.</p>
@@ -235,8 +283,8 @@ export default function DashboardPage() {
           {WORKFLOWS.map((workflow) => (
             <a
               key={workflow.title}
-              href={latestProfileId && workflow.href.startsWith('/generate')
-                ? `${workflow.href}&voice_profile_id=${latestProfileId}`
+              href={selectedProfileId && workflow.href.startsWith('/generate')
+                ? `${workflow.href}&voice_profile_id=${selectedProfileId}`
                 : workflow.href}
               className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-md"
             >
