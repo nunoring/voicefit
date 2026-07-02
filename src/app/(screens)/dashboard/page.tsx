@@ -3,6 +3,26 @@
 import { useState, useEffect } from 'react'
 import type { Post } from '@/types'
 
+type SystemStatus = {
+  db: {
+    status: 'ok' | 'dns_failed' | 'query_failed' | 'not_configured'
+    host: string | null
+    error?: string
+  }
+  localFallback: {
+    active: boolean
+    posts: number
+    voiceProfiles: number
+  }
+  env: {
+    voiceProfileMock: boolean
+    commercePackMock: boolean
+    naverAutomation: boolean
+    shortsRender: boolean
+  }
+  checkedAt: string
+}
+
 const POST_TYPE_LABEL: Record<string, string> = {
   product:        '🛍️ 상품 리뷰',
   daily:          '☀️ 일상 기록',
@@ -38,19 +58,75 @@ function StatusChip({ status }: { status: string }) {
   return <span className={`text-xs ${cls}`}>{map[status] ?? status}</span>
 }
 
+function isSystemStatus(value: unknown): value is SystemStatus {
+  if (!value || typeof value !== 'object') return false
+  const data = value as { db?: { status?: unknown } }
+  return typeof data.db?.status === 'string'
+}
+
+function SystemStatusBanner({ status }: { status: SystemStatus | null }) {
+  if (!status) return null
+
+  const dbOk = status.db.status === 'ok'
+  const dbLabel: Record<SystemStatus['db']['status'], string> = {
+    ok: 'Supabase 연결 정상',
+    dns_failed: 'Supabase DNS 실패',
+    query_failed: 'Supabase 쿼리 실패',
+    not_configured: 'Supabase 설정 없음',
+  }
+
+  return (
+    <div className={`mb-5 rounded-lg border px-4 py-3 ${
+      dbOk ? 'border-green-100 bg-green-50' : 'border-amber-200 bg-amber-50'
+    }`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className={`text-sm font-semibold ${dbOk ? 'text-green-800' : 'text-amber-900'}`}>
+            {dbLabel[status.db.status]}
+          </p>
+          <p className={`mt-0.5 text-xs ${dbOk ? 'text-green-700' : 'text-amber-800'}`}>
+            {dbOk
+              ? 'DB 저장 흐름으로 동작 중입니다.'
+              : `현재 로컬 fallback 사용 중 · 로컬 글 ${status.localFallback.posts}개 · 말투 ${status.localFallback.voiceProfiles}개`}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1.5 text-[11px]">
+          <span className="rounded-full bg-white/70 px-2 py-0.5 text-gray-600">
+            Voice mock {status.env.voiceProfileMock ? 'ON' : 'OFF'}
+          </span>
+          <span className="rounded-full bg-white/70 px-2 py-0.5 text-gray-600">
+            Commerce mock {status.env.commercePackMock ? 'ON' : 'OFF'}
+          </span>
+          <span className="rounded-full bg-white/70 px-2 py-0.5 text-gray-600">
+            Shorts {status.env.shortsRender ? 'ON' : '잠금'}
+          </span>
+        </div>
+      </div>
+      {!dbOk && status.db.host && (
+        <p className="mt-2 text-[11px] text-amber-700">
+          host: {status.db.host}{status.db.error ? ` · ${status.db.error}` : ''}
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function DashboardPage() {
   const [posts, setPosts] = useState<Post[]>([])
   const [loading, setLoading] = useState(true)
   const [latestProfileId, setLatestProfileId] = useState<string | null>(null)
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
 
   useEffect(() => {
     Promise.all([
       fetch('/api/posts').then((r) => r.json()),
       fetch('/api/voice-profiles').then((r) => r.json()),
-    ]).then(([postsData, profilesData]) => {
+      fetch('/api/system/status').then((r) => r.json()).catch(() => null),
+    ]).then(([postsData, profilesData, statusData]) => {
       setPosts(Array.isArray(postsData) ? postsData : [])
       const profiles = Array.isArray(profilesData) ? profilesData : []
       setLatestProfileId(profiles[0]?.id ?? null)
+      setSystemStatus(isSystemStatus(statusData) ? statusData : null)
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [])
@@ -87,6 +163,8 @@ export default function DashboardPage() {
           {hasProfile ? '+ 새 글 쓰기' : '말투 분석 시작'}
         </a>
       </div>
+
+      <SystemStatusBanner status={systemStatus} />
 
       {/* 첫 방문자 안내 */}
       {!hasProfile && !loading && (
